@@ -25,5 +25,4 @@ env/
 storage/chroma/
 
 # Planning documents
-PLAN.md
-PLAN_UPDATE.md
+PLAN*.md
