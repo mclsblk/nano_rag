@@ -11,6 +11,8 @@ from agentic_rag.core.schema import (
     AnswerResponse,
     Chunk,
     Document,
+    IngestResponse,
+    InspectResponse,
     SearchResponse,
     SearchResult,
 )
@@ -22,6 +24,8 @@ __all__ = [
     "ConfigurationError",
     "Document",
     "DocumentError",
+    "IngestResponse",
+    "InspectResponse",
     "ModelError",
     "OutputFormatError",
     "RAGPipelineError",

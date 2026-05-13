@@ -1,7 +1,7 @@
 from typing import Any
 
-from agentic_rag.core import RAGPipelineError, SearchResult
-from agentic_rag.models import ChatModel
+from agentic_rag.core import SearchResult
+from agentic_rag.models import ChatModel, extract_chat_content
 from agentic_rag.rag.prompts import FALLBACK_ANSWER, RAG_SYSTEM_PROMPT, RAG_USER_PROMPT
 
 
@@ -20,7 +20,7 @@ class Generator:
                 {"role": "user", "content": RAG_USER_PROMPT.format(query=query, context=context).strip()},
             ]
         )
-        answer = _extract_answer(response)
+        answer = extract_chat_content(response)
         return answer or FALLBACK_ANSWER
 
 
@@ -38,18 +38,6 @@ def format_context(results: list[SearchResult]) -> str:
             )
         )
     return "\n\n".join(sections)
-
-
-def _extract_answer(response: dict[str, Any]) -> str:
-    message = response.get("message")
-    if not isinstance(message, dict):
-        raise RAGPipelineError("Chat response missing message object.")
-
-    content = message.get("content")
-    if not isinstance(content, str):
-        raise RAGPipelineError("Chat response message missing content.")
-
-    return content.strip()
 
 
 def _metadata_string(metadata: dict[str, Any], key: str) -> str | None:

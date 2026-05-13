@@ -39,3 +39,23 @@ class AnswerResponse(CoreSchema):
     answer: str
     sources: list[SearchResult]
     confidence: Literal["high", "medium", "low"] | None = None
+
+
+class IngestResponse(CoreSchema):
+    mode: Literal["ingest"] = "ingest"
+    path: str
+    loaded_documents: int = Field(ge=0)
+    generated_chunks: int = Field(ge=0)
+    stored_chunks: int = Field(ge=0)
+    skipped: list[str] = Field(default_factory=list)
+
+
+class InspectResponse(CoreSchema):
+    mode: Literal["inspect"] = "inspect"
+    model_provider: str
+    chat_model_provider: str
+    embedding_model_provider: str
+    ollama_chat_model: str = ""
+    ollama_embedding_model: str = ""
+    openai_compatible_chat_model: str = ""
+    openai_compatible_embedding_model: str = ""
