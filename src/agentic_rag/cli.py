@@ -35,7 +35,7 @@ def ask(
 ) -> None:
     """Ask a question using retrieval-augmented generation."""
     def command() -> None:
-        response = create_pipeline().ask(query, top_k=top_k)
+        response = create_pipeline(require_gen=True).ask(query, top_k=top_k)
         typer.echo(create_formatter().format_response(response, as_json=json_output))
 
     _run(command)

@@ -63,11 +63,11 @@ def create_indexer(settings: Settings | None = None) -> Indexer:
     )
 
 
-def create_pipeline(settings: Settings | None = None) -> RAGPipeline:
+def create_pipeline(settings: Settings | None = None, require_gen: bool = False) -> RAGPipeline:
     resolved_settings = settings or create_settings()
     vectorstore = create_vectorstore(resolved_settings)
     retriever = Retriever(vectorstore)
-    generator = Generator(create_chat_model(resolved_settings))
+    generator = Generator(create_chat_model(resolved_settings)) if require_gen else None
     return RAGPipeline(retriever=retriever, generator=generator)
 
 
