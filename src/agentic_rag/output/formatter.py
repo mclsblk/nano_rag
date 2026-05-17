@@ -1,7 +1,10 @@
+from dataclasses import asdict
+import json
 from typing import Any
 
 from pydantic import BaseModel
 
+from agentic_rag.agent import AgenticAskResult
 from agentic_rag.core import AnswerResponse, IngestResponse, InspectResponse, OutputFormatError, SearchResponse, SearchResult
 
 
@@ -11,7 +14,10 @@ class OutputFormatter:
             raise OutputFormatError("content_preview_chars must be greater than 0.")
         self.content_preview_chars = content_preview_chars
 
-    def format_response(self, response: BaseModel, as_json: bool = False) -> str:
+    def format_response(self, response: BaseModel | AgenticAskResult, as_json: bool = False) -> str:
+        if isinstance(response, AgenticAskResult):
+            return self.format_agentic_ask_result(response, as_json=as_json)
+
         if as_json:
             return self.format_json(response)
 
@@ -28,6 +34,24 @@ class OutputFormatter:
 
     def format_json(self, response: BaseModel) -> str:
         return response.model_dump_json()
+
+    def format_agentic_ask_result(self, response: AgenticAskResult, as_json: bool = False) -> str:
+        if as_json:
+            data = response.response.model_dump(mode="json")
+            data["debug"] = asdict(response.debug)
+            return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+        lines = [
+            self.format_answer(response.response),
+            "",
+            "Debug:",
+            f"rewritten_query={response.debug.rewritten_query}",
+            f"retrieval_queries={response.debug.retrieval_queries}",
+            f"context_sufficient={response.debug.context_sufficient}",
+            f"fallback_reason={response.debug.fallback_reason or 'n/a'}",
+            f"selected_source_ids={response.debug.selected_source_ids}",
+        ]
+        return "\n".join(lines)
 
     def format_search(self, response: SearchResponse) -> str:
         lines = [

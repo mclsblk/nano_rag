@@ -1,7 +1,14 @@
 import typer
 
 from agentic_rag.core import AgenticRAGError, InspectResponse
-from agentic_rag.factory import create_formatter, create_indexer, create_pipeline, create_settings, create_vectorstore
+from agentic_rag.factory import (
+    create_agentic_service,
+    create_formatter,
+    create_indexer,
+    create_pipeline,
+    create_settings,
+    create_vectorstore,
+)
 
 
 app = typer.Typer(help="CLI-first local Agentic RAG system.")
@@ -38,11 +45,17 @@ def search(
 def ask(
     query: str,
     top_k: int = typer.Option(5, "--top-k", help="Number of search results to use.", min=1),
+    agentic: bool = typer.Option(False, "--agentic", help="Use agentic query rewrite and multi-query retrieval."),
+    debug: bool = typer.Option(False, "--debug", help="Show agentic debug information when --agentic is enabled."),
     json_output: bool = typer.Option(False, "--json", help="Output stable JSON."),
 ) -> None:
     """Ask a question using retrieval-augmented generation."""
     def command() -> None:
-        response = create_pipeline(require_gen=True).ask(query, top_k=top_k)
+        if agentic:
+            service = create_agentic_service()
+            response = service.ask_with_debug(query, top_k=top_k) if debug else service.ask(query, top_k=top_k)
+        else:
+            response = create_pipeline(require_gen=True).ask(query, top_k=top_k)
         typer.echo(create_formatter().format_response(response, as_json=json_output))
 
     _run(command)

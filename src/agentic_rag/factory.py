@@ -1,3 +1,4 @@
+from agentic_rag.agent import AgentPolicy, AgenticService, MultiQueryGenerator, QueryRewriter
 from agentic_rag.config import Settings, load_settings
 from agentic_rag.core import ConfigurationError
 from agentic_rag.document import DocumentLoader, TextSplitter
@@ -76,6 +77,23 @@ def create_pipeline(settings: Settings | None = None, require_gen: bool = False)
         else None
     )
     return RAGPipeline(retriever=retriever, generator=generator)
+
+
+def create_agentic_service(settings: Settings | None = None) -> AgenticService:
+    resolved_settings = settings or create_settings()
+    vectorstore = create_vectorstore(resolved_settings)
+    retriever = Retriever(vectorstore)
+    chat_model = create_chat_model(resolved_settings)
+    context_builder = ContextBuilder(max_chars=resolved_settings.agentic_context_max_chars)
+    generator = Generator(chat_model, context_builder=context_builder)
+    return AgenticService(
+        retriever=retriever,
+        generator=generator,
+        query_rewriter=QueryRewriter(chat_model),
+        multi_query_generator=MultiQueryGenerator(chat_model),
+        policy=AgentPolicy.from_settings(resolved_settings),
+        multi_query_count=resolved_settings.agentic_multi_query_count,
+    )
 
 
 def create_formatter(content_preview_chars: int | None = None) -> OutputFormatter:
