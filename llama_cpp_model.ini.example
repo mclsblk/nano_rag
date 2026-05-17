@@ -1,0 +1,55 @@
+; ============================================
+;  llama-server 模型配置文件
+;  启动方式：
+;  cd /path/to/llama.cpp
+;  ./build/bin/llama-server --models-preset /path/to/model.ini --port x
+; ============================================
+
+[global]
+; 全局默认参数
+
+;定义chat模型
+[model:chat]
+; 必填：模型文件的绝对路径
+m = /path/to/chat/model
+; 可选：模型别名，后续调用时可用
+alias = expected_name
+
+; 可选：模型参数配置
+; n = 1024
+; fa = on
+; ngl = all
+; c = 65536
+; ctk = q4_0
+; ctv = q4_0
+; b = 512
+; ub = 256
+; t = 14
+; tb = 10
+; temp = 0.3
+; rea = off
+
+; 定义embedding模型
+[model:embedding]
+; 必填：模型文件的绝对路径
+m = /path/to/embedding/model
+; 可选：模型别名，后续调用时可用
+alias = expected_name
+
+; embedding模型在启动时需要加上
+pooling = last
+embedding = on
+
+; 可选：模型参数配置
+; n = 1024
+; fa = on
+; ngl = all
+; c = 2048
+; ctk = q4_0
+; ctv = q4_0
+; b = 512
+; ub = 256
+; t = 14
+; tb = 10
+; temp = 0
+; rea = off
