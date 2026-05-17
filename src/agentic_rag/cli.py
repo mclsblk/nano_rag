@@ -1,6 +1,6 @@
 import typer
 
-from agentic_rag.core import AgenticRAGError
+from agentic_rag.core import AgenticRAGError, InspectResponse
 from agentic_rag.factory import create_formatter, create_indexer, create_pipeline, create_settings, create_vectorstore
 
 
@@ -8,9 +8,16 @@ app = typer.Typer(help="CLI-first local Agentic RAG system.")
 
 
 @app.command()
-def ingest(path: str) -> None:
+def ingest(
+    path: str,
+    json_output: bool = typer.Option(False, "--json", help="Output stable JSON."),
+) -> None:
     """Ingest documents into the local knowledge base."""
-    _run(lambda: typer.echo(f"Ingested chunks: {create_indexer().ingest(path)}"))
+    def command() -> None:
+        response = create_indexer().ingest_with_report(path)
+        typer.echo(create_formatter().format_response(response, as_json=json_output))
+
+    _run(command)
 
 
 @app.command()
@@ -42,19 +49,31 @@ def ask(
 
 
 @app.command()
-def inspect() -> None:
+def inspect(
+    json_output: bool = typer.Option(False, "--json", help="Output stable JSON."),
+) -> None:
     """Show current configuration and vector store status."""
     def command() -> None:
         settings = create_settings()
         vectorstore = create_vectorstore(settings)
-        typer.echo(f"ollama_base_url={settings.ollama_base_url}")
-        typer.echo(f"ollama_chat_model={settings.ollama_chat_model}")
-        typer.echo(f"ollama_embedding_model={settings.ollama_embedding_model}")
-        typer.echo(f"ollama_timeout_seconds={settings.ollama_timeout_seconds}")
-        typer.echo(f"ollama_think={settings.ollama_think}")
-        typer.echo(f"chroma_persist_dir={settings.chroma_persist_dir}")
-        typer.echo(f"chroma_collection={settings.chroma_collection}")
-        typer.echo(f"chroma_count={vectorstore.collection.count()}")
+        response = InspectResponse(
+            model_provider=settings.model_provider,
+            chat_model_provider=settings.chat_model_provider,
+            embedding_model_provider=settings.embedding_model_provider,
+            ollama_base_url=settings.ollama_base_url,
+            ollama_chat_model=settings.ollama_chat_model,
+            ollama_embedding_model=settings.ollama_embedding_model,
+            ollama_timeout_seconds=settings.ollama_timeout_seconds,
+            ollama_think=settings.ollama_think,
+            openai_compatible_base_url=settings.openai_compatible_base_url,
+            openai_compatible_chat_model=settings.openai_compatible_chat_model,
+            openai_compatible_embedding_model=settings.openai_compatible_embedding_model,
+            openai_compatible_timeout_seconds=settings.openai_compatible_timeout_seconds,
+            chroma_persist_dir=str(settings.chroma_persist_dir),
+            chroma_collection=settings.chroma_collection,
+            chroma_count=vectorstore.collection.count(),
+        )
+        typer.echo(create_formatter().format_response(response, as_json=json_output))
 
     _run(command)
 

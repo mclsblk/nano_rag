@@ -10,7 +10,7 @@ from agentic_rag.models import (
     OpenAICompatibleEmbeddingModel,
 )
 from agentic_rag.output import OutputFormatter
-from agentic_rag.rag import Generator, Indexer, RAGPipeline, Retriever
+from agentic_rag.rag import ContextBuilder, Generator, Indexer, RAGPipeline, Retriever
 from agentic_rag.vectorstore import ChromaVectorStore
 
 
@@ -67,7 +67,14 @@ def create_pipeline(settings: Settings | None = None, require_gen: bool = False)
     resolved_settings = settings or create_settings()
     vectorstore = create_vectorstore(resolved_settings)
     retriever = Retriever(vectorstore)
-    generator = Generator(create_chat_model(resolved_settings)) if require_gen else None
+    generator = (
+        Generator(
+            create_chat_model(resolved_settings),
+            context_builder=ContextBuilder(max_chars=resolved_settings.agentic_context_max_chars),
+        )
+        if require_gen
+        else None
+    )
     return RAGPipeline(retriever=retriever, generator=generator)
 
 

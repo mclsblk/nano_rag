@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from agentic_rag.core import AnswerResponse, OutputFormatError, SearchResponse, SearchResult
+from agentic_rag.core import AnswerResponse, IngestResponse, InspectResponse, OutputFormatError, SearchResponse, SearchResult
 
 
 class OutputFormatter:
@@ -19,6 +19,10 @@ class OutputFormatter:
             return self.format_search(response)
         if isinstance(response, AnswerResponse):
             return self.format_answer(response)
+        if isinstance(response, IngestResponse):
+            return self.format_ingest(response)
+        if isinstance(response, InspectResponse):
+            return self.format_inspect(response)
 
         raise OutputFormatError(f"Unsupported response type: {type(response).__name__}")
 
@@ -57,6 +61,40 @@ class OutputFormatter:
                 f"{index}. source={_source_label(source)} page={_page_label(source.metadata)} score={_score_label(source.score)}"
             )
 
+        return "\n".join(lines)
+
+    def format_ingest(self, response: IngestResponse) -> str:
+        lines = [
+            f"Path: {response.path}",
+            f"Loaded documents: {response.loaded_documents}",
+            f"Generated chunks: {response.generated_chunks}",
+            f"Stored chunks: {response.stored_chunks}",
+            f"Skipped: {len(response.skipped)}",
+        ]
+
+        for index, message in enumerate(response.skipped, start=1):
+            lines.append(f"{index}. {message}")
+
+        return "\n".join(lines)
+
+    def format_inspect(self, response: InspectResponse) -> str:
+        lines = [
+            f"model_provider={response.model_provider}",
+            f"chat_model_provider={response.chat_model_provider}",
+            f"embedding_model_provider={response.embedding_model_provider}",
+            f"ollama_base_url={response.ollama_base_url}",
+            f"ollama_chat_model={response.ollama_chat_model}",
+            f"ollama_embedding_model={response.ollama_embedding_model}",
+            f"ollama_timeout_seconds={response.ollama_timeout_seconds}",
+            f"ollama_think={response.ollama_think}",
+            f"openai_compatible_base_url={response.openai_compatible_base_url}",
+            f"openai_compatible_chat_model={response.openai_compatible_chat_model}",
+            f"openai_compatible_embedding_model={response.openai_compatible_embedding_model}",
+            f"openai_compatible_timeout_seconds={response.openai_compatible_timeout_seconds}",
+            f"chroma_persist_dir={response.chroma_persist_dir}",
+            f"chroma_collection={response.chroma_collection}",
+            f"chroma_count={response.chroma_count}",
+        ]
         return "\n".join(lines)
 
 

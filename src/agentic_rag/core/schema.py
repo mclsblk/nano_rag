@@ -55,7 +55,15 @@ class InspectResponse(CoreSchema):
     model_provider: str
     chat_model_provider: str
     embedding_model_provider: str
+    ollama_base_url: str = ""
     ollama_chat_model: str = ""
     ollama_embedding_model: str = ""
+    ollama_timeout_seconds: float | None = None
+    ollama_think: bool | None = None
+    openai_compatible_base_url: str = ""
     openai_compatible_chat_model: str = ""
     openai_compatible_embedding_model: str = ""
+    openai_compatible_timeout_seconds: float | None = None
+    chroma_persist_dir: str
+    chroma_collection: str
+    chroma_count: int = Field(ge=0)

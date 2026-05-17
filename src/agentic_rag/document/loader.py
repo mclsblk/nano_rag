@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import dataclass
 import os
 import warnings
 
@@ -7,63 +8,77 @@ from pypdf import PdfReader
 from agentic_rag.core import Document, DocumentError
 
 
+@dataclass(frozen=True)
+class DocumentLoadReport:
+    documents: list[Document]
+    skipped: list[str]
+
+
 class DocumentLoader:
     supported_extensions = {".md", ".txt", ".pdf"}
 
     def load(self, path: str | Path) -> list[Document]:
+        report = self.load_with_report(path)
+        for message in report.skipped:
+            warnings.warn(message, stacklevel=2)
+        return report.documents
+
+    def load_with_report(self, path: str | Path) -> DocumentLoadReport:
         target = Path(path)
         if not target.exists():
             raise DocumentError(f"Document path does not exist: {target}")
 
         if target.is_file():
-            return self._load_file(target)
+            return self._load_file_with_report(target)
 
         if target.is_dir():
             documents: list[Document] = []
+            skipped: list[str] = []
             for file_path in sorted(item for item in target.rglob("*") if item.is_file()):
-                documents.extend(self._load_file(file_path))
-            return documents
+                report = self._load_file_with_report(file_path)
+                documents.extend(report.documents)
+                skipped.extend(report.skipped)
+            return DocumentLoadReport(documents=documents, skipped=skipped)
 
         raise DocumentError(f"Document path is not a file or directory: {target}")
 
-    def _load_file(self, file_path: Path) -> list[Document]:
+    def _load_file_with_report(self, file_path: Path) -> DocumentLoadReport:
         file_type = file_path.suffix.lower()
         source = self._source_path(file_path)
 
         if file_type not in self.supported_extensions:
-            warnings.warn(f"Unsupported file type skipped: {source}", stacklevel=2)
-            return []
+            return DocumentLoadReport(documents=[], skipped=[f"Unsupported file type skipped: {source}"])
 
         if file_type == ".pdf":
-            return self._load_pdf(file_path)
+            return self._load_pdf_with_report(file_path)
 
         content = self._read_text(file_path)
         metadata = self._metadata(file_path)
 
         if not content.strip():
-            warnings.warn(f"Empty document content skipped: {source}", stacklevel=2)
-            return []
+            return DocumentLoadReport(documents=[], skipped=[f"Empty document content skipped: {source}"])
 
-        return [
-            Document(
-                id=source,
-                content=content,
-                metadata=metadata,
-            )
-        ]
+        return DocumentLoadReport(
+            documents=[
+                Document(
+                    id=source,
+                    content=content,
+                    metadata=metadata,
+                )
+            ],
+            skipped=[],
+        )
 
-    def _load_pdf(self, file_path: Path) -> list[Document]:
+    def _load_pdf_with_report(self, file_path: Path) -> DocumentLoadReport:
         source = self._source_path(file_path)
         page_texts = self._read_pdf(file_path)
         page_count = len(page_texts)
         documents: list[Document] = []
+        skipped: list[str] = []
 
         for page_number, content in enumerate(page_texts, start=1):
             if not content.strip():
-                warnings.warn(
-                    f"Empty PDF page content skipped: {source}#page={page_number}",
-                    stacklevel=2,
-                )
+                skipped.append(f"Empty PDF page content skipped: {source}#page={page_number}")
                 continue
 
             metadata = self._metadata(file_path)
@@ -78,9 +93,9 @@ class DocumentLoader:
             )
 
         if not documents:
-            warnings.warn(f"Empty document content skipped: {source}", stacklevel=2)
+            skipped.append(f"Empty document content skipped: {source}")
 
-        return documents
+        return DocumentLoadReport(documents=documents, skipped=skipped)
 
     def _read_text(self, file_path: Path) -> str:
         try:
