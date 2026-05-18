@@ -26,8 +26,11 @@ class Indexer:
         stored_chunks = 0
 
         if chunks:
-            self.vectorstore.add_documents(chunks)
             stored_chunks = len(chunks)
+            for i in range(0, len(chunks), 50):
+                i_end = min(i + 50, len(chunks))
+                self.vectorstore.add_documents(chunks[i:i_end])
+            
 
         return IngestResponse(
             path=str(path),

@@ -90,7 +90,7 @@ class OutputFormatter:
     def format_ingest(self, response: IngestResponse) -> str:
         lines = [
             f"Path: {response.path}",
-            f"Loaded documents: {response.loaded_documents}",
+            f"Loaded documents(pages): {response.loaded_documents}",
             f"Generated chunks: {response.generated_chunks}",
             f"Stored chunks: {response.stored_chunks}",
             f"Skipped: {len(response.skipped)}",
