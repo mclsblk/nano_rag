@@ -58,6 +58,12 @@ def _source_label(result: SearchResult) -> str:
 
 
 def _page_label(metadata: dict[str, Any]) -> str:
+    page_start = metadata.get("page_start")
+    page_end = metadata.get("page_end")
+    if isinstance(page_start, int) and isinstance(page_end, int):
+        if page_start == page_end:
+            return str(page_start)
+        return f"{page_start}-{page_end}"
     if "page_number" in metadata:
         return str(metadata["page_number"])
     if "page" in metadata:

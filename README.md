@@ -72,6 +72,13 @@ OPENAI_COMPATIBLE_EMBEDDING_MODEL=
 OPENAI_COMPATIBLE_TIMEOUT_SECONDS=30
 CHROMA_PERSIST_DIR=./storage/chroma
 CHROMA_COLLECTION=agentic_rag
+CHUNK_STRATEGY=semantic
+CHUNK_SIZE_CHARS=800
+CHUNK_OVERLAP_CHARS=120
+CHUNK_MIN_CHARS=120
+SEMANTIC_BREAKPOINT_THRESHOLD=0.35
+SEMANTIC_PAGE_MERGE_MIN_SCORE=0.55
+SEMANTIC_MAX_UNITS_PER_CHUNK=12
 AGENTIC_CONTEXT_MIN_SCORE=0.45
 AGENTIC_CONTEXT_MIN_CHARS=80
 AGENTIC_CONTEXT_MAX_CHARS=4000
@@ -79,6 +86,13 @@ AGENTIC_MULTI_QUERY_COUNT=3
 ```
 
 `CHROMA_PERSIST_DIR` 指向本地 Chroma 持久化目录。默认的 `storage/chroma/` 属于运行时数据，不适合提交到版本库。
+
+`CHUNK_STRATEGY` 支持：
+
+- `semantic`：默认策略。先按段落/句子组织语义单元，再用当前 embedding provider 判断语义边界；没有传入 embedding model 的内部调用会 fallback 到 scikit-learn 字符 n-gram TF-IDF。
+- `character`：按字数窗口切分，带固定重叠。
+
+`CHUNK_SIZE_CHARS`、`CHUNK_OVERLAP_CHARS` 和 `CHUNK_MIN_CHARS` 按“字数”计算：中文、英文、数字计入，空白和标点不计入。`CHUNK_SIZE_CHARS` 在 `semantic` 下是最大字数预算，不表示每 N 字固定切一刀；`CHUNK_OVERLAP_CHARS` 只对 `character` 策略生效。semantic 阈值是启发式默认值，可按语料继续微调。
 
 如需通过 llama.cpp、vLLM、LM Studio 或其他 OpenAI 格式服务接入模型，可把 provider 切到 `openai_compatible`，并配置对应 base URL 与模型名。
 
@@ -112,6 +126,19 @@ rag ingest docs
 
 ```bash
 rag ingest docs --json
+```
+
+`rag ingest` 不会覆盖已存在的 source。需要重新导入同一个 source 时，先删除旧 chunks：
+
+```bash
+rag de-ingest docs/project.md
+rag ingest docs/project.md
+```
+
+删除并输出 JSON：
+
+```bash
+rag de-ingest docs/project.md --json
 ```
 
 检索知识库：
@@ -154,9 +181,11 @@ rag ask "search 和 ask 有什么区别？" --agentic --debug --json
 
 1. `rag ingest` 读取文件或目录。
 2. `DocumentLoader` 跳过不支持的文件类型和空内容。
-3. `TextSplitter` 将文档切成带重叠的文本块。
-4. 当前 embedding provider 生成 embedding。
-5. `ChromaVectorStore` 将分块、向量和元数据写入 Chroma。
+3. 当前 chunk strategy 将文档切成 chunks。
+   - `semantic`：使用 embedding 相似度判断语义边界，PDF 可在相邻页之间合并连续 chunk。
+   - `character`：按字数窗口切分，并使用固定重叠。
+4. 当前 embedding provider 为最终 chunks 生成 embedding。
+5. `ChromaVectorStore` 将 chunks、向量和元数据写入 Chroma。
 6. `rag search` 根据 query 检索相似文本块。
 7. `rag ask` 将检索结果作为上下文交给聊天模型生成回答。
 8. `rag ask --agentic` 会先改写 query、生成多个检索 query、合并去重检索结果，再判断 context 是否足够。
@@ -167,7 +196,7 @@ rag ask "search 和 ask 有什么区别？" --agentic --debug --json
 
 - 原始 query
 - 命中结果数量
-- 每条结果的 source、page、score
+- 每条结果的 source、page、score；跨页 chunk 会显示类似 `page=3-4`
 - 命中的文本内容
 
 `ask` 默认输出包含：
@@ -185,8 +214,10 @@ rag ask "search 和 ask 有什么区别？" --agentic --debug --json
 
 - 仅支持 `.md`、`.txt`、`.pdf`。
 - 目录导入会递归扫描文件。
+- `rag ingest` 不覆盖已存在 source；更新前必须先 `rag de-ingest <source>`。
 - 不支持的文件会被跳过并发出 warning。
 - 空文本文件、无可提取文本的 PDF 页面会被跳过。
+- PDF loader 仍按页输出 document；semantic chunker 可以合并相邻页的连续语义 chunk。
 - 当 `ask` 没有检索到足够上下文时，会返回“无法从当前知识库中确定。”
 - `rag search` 始终保持单 query 检索，不启用 rewrite 或 multi-query。
 - Query rewrite 和 multi-query retrieval 只在 `rag ask --agentic` 下启用。

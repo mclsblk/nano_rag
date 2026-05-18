@@ -1,7 +1,7 @@
 from agentic_rag.agent import AgentPolicy, AgenticService, MultiQueryGenerator, QueryRewriter
 from agentic_rag.config import Settings, load_settings
 from agentic_rag.core import ConfigurationError
-from agentic_rag.document import DocumentLoader, TextSplitter
+from agentic_rag.document import DocumentLoader, SemanticChunker, TextSplitter
 from agentic_rag.models import (
     ChatModel,
     EmbeddingModel,
@@ -49,18 +49,45 @@ def create_embedding_model(settings: Settings | None = None) -> EmbeddingModel:
     )
 
 
-def create_vectorstore(settings: Settings | None = None) -> ChromaVectorStore:
+def create_vectorstore(settings: Settings | None = None, embedding_model: EmbeddingModel | None = None) -> ChromaVectorStore:
     resolved_settings = settings or create_settings()
-    embedding_model = create_embedding_model(resolved_settings)
-    return ChromaVectorStore(embedding_model=embedding_model, settings=resolved_settings)
+    resolved_embedding_model = embedding_model or create_embedding_model(resolved_settings)
+    return ChromaVectorStore(embedding_model=resolved_embedding_model, settings=resolved_settings)
+
+
+def create_chunker(settings: Settings | None = None, embedding_model: EmbeddingModel | None = None):
+    resolved_settings = settings or create_settings()
+    strategy = _normalize_provider(resolved_settings.chunk_strategy)
+
+    if strategy == "character":
+        return TextSplitter(
+            chunk_size=resolved_settings.chunk_size_chars,
+            chunk_overlap=resolved_settings.chunk_overlap_chars,
+        )
+    if strategy == "semantic":
+        return SemanticChunker(
+            chunk_size=resolved_settings.chunk_size_chars,
+            chunk_overlap=resolved_settings.chunk_overlap_chars,
+            chunk_min_chars=resolved_settings.chunk_min_chars,
+            breakpoint_threshold=resolved_settings.semantic_breakpoint_threshold,
+            page_merge_min_score=resolved_settings.semantic_page_merge_min_score,
+            max_units_per_chunk=resolved_settings.semantic_max_units_per_chunk,
+            embedding_model=embedding_model,
+        )
+
+    raise ConfigurationError(
+        f"Unsupported chunk strategy: {resolved_settings.chunk_strategy}. "
+        "Supported strategies: character, semantic."
+    )
 
 
 def create_indexer(settings: Settings | None = None) -> Indexer:
     resolved_settings = settings or create_settings()
+    embedding_model = create_embedding_model(resolved_settings)
     return Indexer(
         loader=DocumentLoader(),
-        splitter=TextSplitter(),
-        vectorstore=create_vectorstore(resolved_settings),
+        splitter=create_chunker(resolved_settings, embedding_model=embedding_model),
+        vectorstore=create_vectorstore(resolved_settings, embedding_model=embedding_model),
     )
 
 

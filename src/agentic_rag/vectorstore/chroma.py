@@ -45,6 +45,33 @@ class ChromaVectorStore(VectorStore):
         except Exception as exc:
             raise VectorStoreError("Failed to add documents to Chroma.") from exc
 
+    def source_exists(self, source: str) -> bool:
+        try:
+            raw = self.collection.get(
+                where={"source": source},
+                limit=1,
+            )
+        except Exception as exc:
+            raise VectorStoreError(f"Failed to check source in Chroma: {source}") from exc
+
+        return bool(raw.get("ids"))
+
+    def delete_by_source(self, source: str) -> int:
+        try:
+            raw = self.collection.get(
+                where={"source": source},
+                include=["metadatas"],
+            )
+            ids = raw.get("ids") or []
+            if not ids:
+                return 0
+
+            self.collection.delete(where={"source": source})
+        except Exception as exc:
+            raise VectorStoreError(f"Failed to delete source from Chroma: {source}") from exc
+
+        return len(ids)
+
     def similarity_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         if top_k <= 0:
             raise VectorStoreError("top_k must be greater than 0.")

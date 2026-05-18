@@ -50,6 +50,12 @@ class IngestResponse(CoreSchema):
     skipped: list[str] = Field(default_factory=list)
 
 
+class DeIngestResponse(CoreSchema):
+    mode: Literal["de_ingest"] = "de_ingest"
+    source: str
+    deleted_chunks: int = Field(ge=0)
+
+
 class InspectResponse(CoreSchema):
     mode: Literal["inspect"] = "inspect"
     model_provider: str

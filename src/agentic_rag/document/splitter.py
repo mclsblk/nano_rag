@@ -25,12 +25,14 @@ class TextSplitter:
             return []
 
         chunks: list[Chunk] = []
-        step = self.chunk_size - self.chunk_overlap
         start = 0
         index = 1
 
         while start < len(content):
-            end = min(start + self.chunk_size, len(content))
+            end = _end_index_after_words(content, start, self.chunk_size)
+            if end <= start:
+                break
+
             chunk_content = content[start:end]
             if chunk_content.strip():
                 chunks.append(
@@ -44,6 +46,42 @@ class TextSplitter:
 
             if end == len(content):
                 break
-            start += step
+
+            next_start = _start_index_for_overlap(content, end, self.chunk_overlap)
+            start = next_start if next_start > start else end
 
         return chunks
+
+
+def _end_index_after_words(content: str, start: int, max_words: int) -> int:
+    words_seen = 0
+    for index in range(start, len(content)):
+        if _is_word_char(content[index]):
+            words_seen += 1
+            if words_seen == max_words:
+                return _next_word_start_or_end(content, index + 1)
+    return len(content)
+
+
+def _next_word_start_or_end(content: str, start: int) -> int:
+    for index in range(start, len(content)):
+        if _is_word_char(content[index]):
+            return index
+    return len(content)
+
+
+def _start_index_for_overlap(content: str, end: int, overlap_words: int) -> int:
+    if overlap_words <= 0:
+        return end
+
+    words_seen = 0
+    for index in range(end - 1, -1, -1):
+        if _is_word_char(content[index]):
+            words_seen += 1
+            if words_seen == overlap_words:
+                return index
+    return 0
+
+
+def _is_word_char(character: str) -> bool:
+    return character.isalnum()

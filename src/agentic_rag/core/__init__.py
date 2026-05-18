@@ -5,11 +5,13 @@ from agentic_rag.core.exceptions import (
     ModelError,
     OutputFormatError,
     RAGPipelineError,
+    SourceConflictError,
     VectorStoreError,
 )
 from agentic_rag.core.schema import (
     AnswerResponse,
     Chunk,
+    DeIngestResponse,
     Document,
     IngestResponse,
     InspectResponse,
@@ -22,6 +24,7 @@ __all__ = [
     "AnswerResponse",
     "Chunk",
     "ConfigurationError",
+    "DeIngestResponse",
     "Document",
     "DocumentError",
     "IngestResponse",
@@ -31,5 +34,6 @@ __all__ = [
     "RAGPipelineError",
     "SearchResponse",
     "SearchResult",
+    "SourceConflictError",
     "VectorStoreError",
 ]

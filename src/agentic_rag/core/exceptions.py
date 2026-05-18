@@ -18,6 +18,10 @@ class VectorStoreError(AgenticRAGError):
     """Raised when vector store operations fail."""
 
 
+class SourceConflictError(AgenticRAGError):
+    """Raised when ingest would overwrite an existing source."""
+
+
 class RAGPipelineError(AgenticRAGError):
     """Raised when the RAG pipeline fails."""
 

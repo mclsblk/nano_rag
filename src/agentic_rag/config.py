@@ -20,6 +20,13 @@ class Settings(BaseModel):
     openai_compatible_timeout_seconds: float = 30.0
     chroma_persist_dir: Path = Field(default=Path("./storage/chroma"))
     chroma_collection: str = "agentic_rag"
+    chunk_strategy: str = "semantic"
+    chunk_size_chars: int = Field(default=800, ge=1)
+    chunk_overlap_chars: int = Field(default=120, ge=0)
+    chunk_min_chars: int = Field(default=120, ge=0)
+    semantic_breakpoint_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    semantic_page_merge_min_score: float = Field(default=0.55, ge=0.0, le=1.0)
+    semantic_max_units_per_chunk: int = Field(default=12, ge=1)
     agentic_context_min_score: float = Field(default=0.45, ge=0.0, le=1.0)
     agentic_context_min_chars: int = Field(default=80, ge=0)
     agentic_context_max_chars: int = Field(default=4000, ge=1)
@@ -88,6 +95,43 @@ def load_settings() -> Settings:
             )
         ),
         chroma_collection=_env_string("CHROMA_COLLECTION", Settings.model_fields["chroma_collection"].default),
+        chunk_strategy=_env_string("CHUNK_STRATEGY", Settings.model_fields["chunk_strategy"].default),
+        chunk_size_chars=int(
+            os.getenv(
+                "CHUNK_SIZE_CHARS",
+                str(Settings.model_fields["chunk_size_chars"].default),
+            )
+        ),
+        chunk_overlap_chars=int(
+            os.getenv(
+                "CHUNK_OVERLAP_CHARS",
+                str(Settings.model_fields["chunk_overlap_chars"].default),
+            )
+        ),
+        chunk_min_chars=int(
+            os.getenv(
+                "CHUNK_MIN_CHARS",
+                str(Settings.model_fields["chunk_min_chars"].default),
+            )
+        ),
+        semantic_breakpoint_threshold=float(
+            os.getenv(
+                "SEMANTIC_BREAKPOINT_THRESHOLD",
+                str(Settings.model_fields["semantic_breakpoint_threshold"].default),
+            )
+        ),
+        semantic_page_merge_min_score=float(
+            os.getenv(
+                "SEMANTIC_PAGE_MERGE_MIN_SCORE",
+                str(Settings.model_fields["semantic_page_merge_min_score"].default),
+            )
+        ),
+        semantic_max_units_per_chunk=int(
+            os.getenv(
+                "SEMANTIC_MAX_UNITS_PER_CHUNK",
+                str(Settings.model_fields["semantic_max_units_per_chunk"].default),
+            )
+        ),
         agentic_context_min_score=float(
             os.getenv(
                 "AGENTIC_CONTEXT_MIN_SCORE",

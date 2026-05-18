@@ -9,6 +9,14 @@ class VectorStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def source_exists(self, source: str) -> bool:
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_by_source(self, source: str) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
     def similarity_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         raise NotImplementedError
 

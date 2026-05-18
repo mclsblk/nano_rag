@@ -28,6 +28,19 @@ def ingest(
 
 
 @app.command()
+def de_ingest(
+    source: str,
+    json_output: bool = typer.Option(False, "--json", help="Output stable JSON."),
+) -> None:
+    """Delete chunks for a source from the local knowledge base."""
+    def command() -> None:
+        response = create_indexer().de_ingest(source)
+        typer.echo(create_formatter().format_response(response, as_json=json_output))
+
+    _run(command)
+
+
+@app.command()
 def search(
     query: str,
     top_k: int = typer.Option(5, "--top-k", help="Number of search results to return.", min=1),

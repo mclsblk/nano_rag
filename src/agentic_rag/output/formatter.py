@@ -5,7 +5,15 @@ from typing import Any
 from pydantic import BaseModel
 
 from agentic_rag.agent import AgenticAskResult
-from agentic_rag.core import AnswerResponse, IngestResponse, InspectResponse, OutputFormatError, SearchResponse, SearchResult
+from agentic_rag.core import (
+    AnswerResponse,
+    DeIngestResponse,
+    IngestResponse,
+    InspectResponse,
+    OutputFormatError,
+    SearchResponse,
+    SearchResult,
+)
 
 
 class OutputFormatter:
@@ -27,6 +35,8 @@ class OutputFormatter:
             return self.format_answer(response)
         if isinstance(response, IngestResponse):
             return self.format_ingest(response)
+        if isinstance(response, DeIngestResponse):
+            return self.format_de_ingest(response)
         if isinstance(response, InspectResponse):
             return self.format_inspect(response)
 
@@ -101,6 +111,14 @@ class OutputFormatter:
 
         return "\n".join(lines)
 
+    def format_de_ingest(self, response: DeIngestResponse) -> str:
+        return "\n".join(
+            [
+                f"Source: {response.source}",
+                f"Deleted chunks: {response.deleted_chunks}",
+            ]
+        )
+
     def format_inspect(self, response: InspectResponse) -> str:
         lines = [
             f"model_provider={response.model_provider}",
@@ -130,6 +148,12 @@ def _source_label(result: SearchResult) -> str:
 
 
 def _page_label(metadata: dict[str, Any]) -> str:
+    page_start = metadata.get("page_start")
+    page_end = metadata.get("page_end")
+    if isinstance(page_start, int) and isinstance(page_end, int):
+        if page_start == page_end:
+            return str(page_start)
+        return f"{page_start}-{page_end}"
     if "page_number" in metadata:
         return str(metadata["page_number"])
     if "page" in metadata:
