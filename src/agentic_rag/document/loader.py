@@ -108,7 +108,7 @@ class DocumentLoader:
     def _read_pdf(self, file_path: Path) -> list[str]:
         try:
             reader = PdfReader(str(file_path))
-            page_texts = [_normalize_pdf_text(page.extract_text() or "") for page in reader.pages]
+            page_texts = [page.extract_text() or "" for page in reader.pages]
         except Exception as exc:
             raise DocumentError(f"Failed to read PDF document: {file_path}") from exc
 
@@ -123,50 +123,3 @@ class DocumentLoader:
 
     def _source_path(self, file_path: Path) -> str:
         return Path(os.path.relpath(file_path.resolve(), Path.cwd().resolve())).as_posix()
-
-
-def _normalize_pdf_text(text: str) -> str:
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    paragraphs: list[str] = []
-    current_lines: list[str] = []
-
-    for line in text.split("\n"):
-        stripped = line.strip()
-        if not stripped:
-            if current_lines:
-                paragraphs.append(_join_pdf_lines(current_lines))
-                current_lines = []
-            continue
-        current_lines.append(stripped)
-
-    if current_lines:
-        paragraphs.append(_join_pdf_lines(current_lines))
-
-    return "\n\n".join(paragraph for paragraph in paragraphs if paragraph)
-
-
-def _join_pdf_lines(lines: list[str]) -> str:
-    if not lines:
-        return ""
-
-    text = lines[0]
-    for line in lines[1:]:
-        if text.endswith("-") and line[:1].islower():
-            text = f"{text[:-1]}{line}"
-        elif _ends_with_cjk(text) and _starts_with_cjk(line):
-            text = f"{text}{line}"
-        else:
-            text = f"{text} {line}"
-    return text
-
-
-def _starts_with_cjk(text: str) -> bool:
-    return bool(text) and _is_cjk(text[0])
-
-
-def _ends_with_cjk(text: str) -> bool:
-    return bool(text) and _is_cjk(text[-1])
-
-
-def _is_cjk(character: str) -> bool:
-    return "\u4e00" <= character <= "\u9fff"

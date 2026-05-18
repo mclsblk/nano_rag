@@ -1,11 +1,11 @@
 from dataclasses import dataclass
-import re
 from typing import Any
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from agentic_rag.core import Chunk, Document, DocumentError
+from agentic_rag.document.builder import BuiltSection, DocumentBuilder, TextBlock
 from agentic_rag.models import EmbeddingModel
 
 
@@ -14,6 +14,7 @@ class _TextUnit:
     content: str
     start_char: int
     end_char: int
+    block_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -25,11 +26,8 @@ class _DraftChunk:
     page_start: int | None = None
     page_end: int | None = None
     page_count: int | None = None
+    hard_break_key: str | None = None
     semantic_score: float = 1.0
-
-
-_BLANK_LINE_RE = re.compile(r"\n\s*\n+")
-_SENTENCE_RE = re.compile(r"[^。！？；;.!?\n]+[。！？；;.!?]*", re.MULTILINE)
 
 
 class SemanticChunker:
@@ -65,45 +63,33 @@ class SemanticChunker:
         self.page_merge_min_score = page_merge_min_score
         self.max_units_per_chunk = max_units_per_chunk
         self.embedding_model = embedding_model
+        self.builder = DocumentBuilder(block_min_chars=chunk_min_chars, block_max_chars=chunk_size)
 
     def split_documents(self, documents: list[Document]) -> list[Chunk]:
+        sections = self.builder.build_documents(documents)
         chunks: list[Chunk] = []
         index = 0
 
-        while index < len(documents):
-            document = documents[index]
-            if _is_pdf_page_document(document):
-                source = _document_source(document)
-                pdf_documents: list[Document] = []
-                while index < len(documents) and _is_pdf_page_document(documents[index]):
-                    if _document_source(documents[index]) != source:
-                        break
-                    pdf_documents.append(documents[index])
-                    index += 1
-                chunks.extend(self._split_pdf_documents(pdf_documents, source))
-            else:
-                chunks.extend(self._split_single_document(document))
+        while index < len(sections):
+            source = sections[index].source
+            source_sections: list[BuiltSection] = []
+            while index < len(sections) and sections[index].source == source:
+                source_sections.append(sections[index])
                 index += 1
+
+            if all(section.page_number is not None for section in source_sections):
+                source_sections = sorted(source_sections, key=lambda section: section.page_number or 0)
+
+            drafts: list[_DraftChunk] = []
+            for section in source_sections:
+                drafts.extend(self._split_section_to_drafts(section))
+
+            chunks.extend(self._finalize_chunks(self._merge_pdf_page_boundaries(drafts), source))
 
         return chunks
 
-    def _split_pdf_documents(self, documents: list[Document], source: str) -> list[Chunk]:
-        drafts: list[_DraftChunk] = []
-        sorted_documents = sorted(documents, key=lambda document: _page_number(document) or 0)
-
-        for document in sorted_documents:
-            drafts.extend(self._split_document_to_drafts(document))
-
-        merged_drafts = self._merge_pdf_page_boundaries(drafts)
-        return self._finalize_chunks(merged_drafts, source)
-
-    def _split_single_document(self, document: Document) -> list[Chunk]:
-        source = _document_source(document)
-        drafts = self._split_document_to_drafts(document)
-        return self._finalize_chunks(drafts, source)
-
-    def _split_document_to_drafts(self, document: Document) -> list[_DraftChunk]:
-        units = self._split_units(document.content)
+    def _split_section_to_drafts(self, section: BuiltSection) -> list[_DraftChunk]:
+        units = self._blocks_to_units(section.blocks)
         if not units:
             return []
 
@@ -120,12 +106,12 @@ class SemanticChunker:
                 continue
 
             similarity = similarities[index - 1]
-            would_exceed_size = _word_count(document.content[current_units[0].start_char : unit.end_char]) > self.chunk_size
+            would_exceed_size = sum(_word_count(item.content) for item in [*current_units, unit]) > self.chunk_size
             would_exceed_units = len(current_units) >= self.max_units_per_chunk
             should_break = similarity <= breakpoint_cutoff or would_exceed_size or would_exceed_units
 
             if should_break:
-                drafts.append(self._draft_from_units(document, current_units, current_scores))
+                drafts.append(self._units_to_draft(section, current_units, current_scores))
                 current_units = [unit]
                 current_scores = []
             else:
@@ -133,96 +119,70 @@ class SemanticChunker:
                 current_scores.append(similarity)
 
         if current_units:
-            drafts.append(self._draft_from_units(document, current_units, current_scores))
+            drafts.append(self._units_to_draft(section, current_units, current_scores))
 
         return self._merge_small_chunks(drafts)
 
-    def _split_units(self, content: str) -> list[_TextUnit]:
+    def _blocks_to_units(self, blocks: list[TextBlock]) -> list[_TextUnit]:
         units: list[_TextUnit] = []
-        cursor = 0
-
-        for match in _BLANK_LINE_RE.finditer(content):
-            units.extend(self._split_paragraph(content[cursor : match.start()], cursor))
-            cursor = match.end()
-
-        units.extend(self._split_paragraph(content[cursor:], cursor))
-        return units
-
-    def _split_paragraph(self, paragraph: str, offset: int) -> list[_TextUnit]:
-        stripped = paragraph.strip()
-        if not stripped:
-            return []
-
-        start = offset + len(paragraph) - len(paragraph.lstrip())
-        end = offset + len(paragraph.rstrip())
-        paragraph = paragraph[start - offset : end - offset]
-
-        if _word_count(paragraph) <= self.chunk_size:
-            return [_TextUnit(content=paragraph, start_char=start, end_char=end)]
-
-        units: list[_TextUnit] = []
-        for match in _SENTENCE_RE.finditer(paragraph):
-            sentence = match.group(0).strip()
-            if not sentence:
-                continue
-
-            sentence_start = start + match.start() + len(match.group(0)) - len(match.group(0).lstrip())
-            sentence_end = start + match.end() - (len(match.group(0)) - len(match.group(0).rstrip()))
-            units.extend(self._split_long_unit(sentence, sentence_start, sentence_end))
-
-        if units:
-            return units
-
-        return self._split_long_unit(paragraph, start, end)
-
-    def _split_long_unit(self, content: str, start_char: int, end_char: int) -> list[_TextUnit]:
-        if _word_count(content) <= self.chunk_size:
-            return [_TextUnit(content=content, start_char=start_char, end_char=end_char)]
-
-        units: list[_TextUnit] = []
-        cursor = 0
-        while cursor < len(content):
-            unit_end = _end_index_after_words(content, cursor, self.chunk_size)
-            if unit_end <= cursor:
-                break
-
-            unit_content = content[cursor:unit_end]
-            unit_start = start_char + cursor
-            absolute_unit_end = start_char + unit_end
-            if unit_content.strip():
-                leading_trim = len(unit_content) - len(unit_content.lstrip())
-                trailing_trim = len(unit_content) - len(unit_content.rstrip())
+        for block_index, block in enumerate(blocks):
+            if _word_count(block.content) <= self.chunk_size:
                 units.append(
                     _TextUnit(
-                        content=unit_content.strip(),
-                        start_char=unit_start + leading_trim,
-                        end_char=absolute_unit_end - trailing_trim,
+                        content=block.content,
+                        start_char=block.start_char,
+                        end_char=block.end_char,
+                        block_index=block_index,
                     )
                 )
-            cursor = unit_end
+                continue
+
+            cursor = 0
+            while cursor < len(block.content):
+                unit_end = _end_index_after_words(block.content, cursor, self.chunk_size)
+                if unit_end <= cursor:
+                    break
+
+                unit_content = block.content[cursor:unit_end]
+                unit_start = block.start_char + cursor
+                absolute_unit_end = block.start_char + unit_end
+                if unit_content.strip():
+                    leading_trim = len(unit_content) - len(unit_content.lstrip())
+                    trailing_trim = len(unit_content) - len(unit_content.rstrip())
+                    units.append(
+                        _TextUnit(
+                            content=unit_content.strip(),
+                            start_char=unit_start + leading_trim,
+                            end_char=absolute_unit_end - trailing_trim,
+                            block_index=block_index,
+                        )
+                    )
+                cursor = unit_end
 
         return units
 
-    def _draft_from_units(
+    def _units_to_draft(
         self,
-        document: Document,
+        section: BuiltSection,
         units: list[_TextUnit],
         scores: list[float],
     ) -> _DraftChunk:
-        start_char = units[0].start_char
-        end_char = units[-1].end_char
-        page_number = _page_number(document)
-        page_count = _int_metadata(document.metadata.get("page_count"))
-        content = document.content[start_char:end_char].strip()
+        content = units[0].content
+        previous_block_index = units[0].block_index
+        for unit in units[1:]:
+            separator = "" if unit.block_index == previous_block_index else "\n\n"
+            content = f"{content.rstrip()}{separator}{unit.content.lstrip()}"
+            previous_block_index = unit.block_index
 
         return _DraftChunk(
-            content=content,
-            metadata=_scalar_metadata(document.metadata),
-            start_char=start_char,
-            end_char=end_char,
-            page_start=page_number,
-            page_end=page_number,
-            page_count=page_count,
+            content=content.strip(),
+            metadata=_scalar_metadata(section.metadata),
+            start_char=units[0].start_char,
+            end_char=units[-1].end_char,
+            page_start=section.page_number,
+            page_end=section.page_number,
+            page_count=_int_metadata(section.metadata.get("page_count")),
+            hard_break_key=section.hard_break_key,
             semantic_score=_average(scores),
         )
 
@@ -263,22 +223,27 @@ class SemanticChunker:
                 continue
 
             previous = merged[-1]
-            if self._should_merge_pdf_boundary(previous, draft):
-                score = self._semantic_similarity(previous.content, draft.content)
-                merged[-1] = self._merge_drafts(previous, draft, semantic_score=score)
-            else:
+            if previous.page_end is None or draft.page_start is None:
                 merged.append(draft)
+                continue
+            if draft.page_start != previous.page_end + 1:
+                merged.append(draft)
+                continue
+            if draft.hard_break_key is not None and draft.hard_break_key != previous.hard_break_key:
+                merged.append(draft)
+                continue
+            if _combined_length(previous, draft) > self.chunk_size:
+                merged.append(draft)
+                continue
+
+            score = self._semantic_similarity(previous.content, draft.content)
+            if score < self.page_merge_min_score:
+                merged.append(draft)
+                continue
+
+            merged[-1] = self._merge_drafts(previous, draft, semantic_score=score)
 
         return merged
-
-    def _should_merge_pdf_boundary(self, previous: _DraftChunk, current: _DraftChunk) -> bool:
-        if previous.page_end is None or current.page_start is None:
-            return False
-        if current.page_start != previous.page_end + 1:
-            return False
-        if _combined_length(previous, current) > self.chunk_size:
-            return False
-        return self._semantic_similarity(previous.content, current.content) >= self.page_merge_min_score
 
     def _merge_drafts(
         self,
@@ -297,6 +262,7 @@ class SemanticChunker:
             page_start=first.page_start,
             page_end=second.page_end,
             page_count=first.page_count or second.page_count,
+            hard_break_key=first.hard_break_key or second.hard_break_key,
             semantic_score=semantic_score if semantic_score is not None else _average([first.semantic_score, second.semantic_score]),
         )
 
@@ -323,6 +289,8 @@ class SemanticChunker:
                 metadata["page_number"] = draft.page_start
             if draft.page_count is not None:
                 metadata["page_count"] = draft.page_count
+            if draft.hard_break_key is not None:
+                metadata["hard_break_key"] = draft.hard_break_key
 
             chunks.append(
                 Chunk(
@@ -385,23 +353,6 @@ class SemanticChunker:
             scores.append(max(0.0, min(1.0, score)))
 
         return scores
-
-
-def _is_pdf_page_document(document: Document) -> bool:
-    return (
-        document.metadata.get("file_type") == ".pdf"
-        and isinstance(document.metadata.get("source"), str)
-        and _page_number(document) is not None
-    )
-
-
-def _document_source(document: Document) -> str:
-    source = document.metadata.get("source")
-    return source if isinstance(source, str) and source else document.id
-
-
-def _page_number(document: Document) -> int | None:
-    return _int_metadata(document.metadata.get("page_number"))
 
 
 def _int_metadata(value: Any) -> int | None:
