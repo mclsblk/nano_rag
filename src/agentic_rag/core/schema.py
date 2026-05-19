@@ -73,3 +73,7 @@ class InspectResponse(CoreSchema):
     chroma_persist_dir: str
     chroma_collection: str
     chroma_count: int = Field(ge=0)
+    search_strategy: str = "hybrid"
+    keyword_index_path: str = ""
+    keyword_source_count: int = Field(default=0, ge=0)
+    keyword_chunk_count: int = Field(default=0, ge=0)

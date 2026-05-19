@@ -18,6 +18,14 @@ class VectorStoreError(AgenticRAGError):
     """Raised when vector store operations fail."""
 
 
+class KeywordStoreError(AgenticRAGError):
+    """Raised when keyword store operations fail."""
+
+
+class IndexConsistencyError(AgenticRAGError):
+    """Raised when hybrid retrieval indexes are inconsistent."""
+
+
 class SourceConflictError(AgenticRAGError):
     """Raised when ingest would overwrite an existing source."""
 

@@ -136,6 +136,10 @@ class OutputFormatter:
             f"chroma_persist_dir={response.chroma_persist_dir}",
             f"chroma_collection={response.chroma_collection}",
             f"chroma_count={response.chroma_count}",
+            f"search_strategy={response.search_strategy}",
+            f"keyword_index_path={response.keyword_index_path}",
+            f"keyword_source_count={response.keyword_source_count}",
+            f"keyword_chunk_count={response.keyword_chunk_count}",
         ]
         return "\n".join(lines)
 

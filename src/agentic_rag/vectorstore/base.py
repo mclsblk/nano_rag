@@ -17,9 +17,17 @@ class VectorStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def similarity_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
+    def get_by_ids(self, ids: list[str]) -> list[SearchResult]:
         raise NotImplementedError
 
     @abstractmethod
-    def estimate_confidence(self, results: list[SearchResult]) -> str:
+    def count_chunks(self) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_sources(self) -> list[str]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def similarity_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         raise NotImplementedError

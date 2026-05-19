@@ -5,6 +5,7 @@ from agentic_rag.factory import (
     create_agentic_service,
     create_formatter,
     create_indexer,
+    create_keyword_store,
     create_pipeline,
     create_settings,
     create_vectorstore,
@@ -82,6 +83,7 @@ def inspect(
     def command() -> None:
         settings = create_settings()
         vectorstore = create_vectorstore(settings)
+        keyword_store = create_keyword_store(settings)
         response = InspectResponse(
             model_provider=settings.model_provider,
             chat_model_provider=settings.chat_model_provider,
@@ -97,7 +99,11 @@ def inspect(
             openai_compatible_timeout_seconds=settings.openai_compatible_timeout_seconds,
             chroma_persist_dir=str(settings.chroma_persist_dir),
             chroma_collection=settings.chroma_collection,
-            chroma_count=vectorstore.collection.count(),
+            chroma_count=vectorstore.count_chunks(),
+            search_strategy=settings.search_strategy,
+            keyword_index_path=str(settings.keyword_index_path),
+            keyword_source_count=keyword_store.count_sources(),
+            keyword_chunk_count=keyword_store.count_chunks(),
         )
         typer.echo(create_formatter().format_response(response, as_json=json_output))
 

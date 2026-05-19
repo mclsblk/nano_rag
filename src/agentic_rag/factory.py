@@ -2,6 +2,7 @@ from agentic_rag.agent import AgentPolicy, AgenticService, MultiQueryGenerator, 
 from agentic_rag.config import Settings, load_settings
 from agentic_rag.core import ConfigurationError
 from agentic_rag.document import DocumentLoader, SemanticChunker, TextSplitter
+from agentic_rag.keyword import SQLiteKeywordStore
 from agentic_rag.models import (
     ChatModel,
     EmbeddingModel,
@@ -11,7 +12,7 @@ from agentic_rag.models import (
     OpenAICompatibleEmbeddingModel,
 )
 from agentic_rag.output import OutputFormatter
-from agentic_rag.rag import ContextBuilder, Generator, Indexer, RAGPipeline, Retriever
+from agentic_rag.rag import ContextBuilder, Generator, HybridRetriever, Indexer, KeywordRetriever, RAGPipeline, Retriever
 from agentic_rag.vectorstore import ChromaVectorStore
 
 
@@ -55,6 +56,11 @@ def create_vectorstore(settings: Settings | None = None, embedding_model: Embedd
     return ChromaVectorStore(embedding_model=resolved_embedding_model, settings=resolved_settings)
 
 
+def create_keyword_store(settings: Settings | None = None) -> SQLiteKeywordStore:
+    resolved_settings = settings or create_settings()
+    return SQLiteKeywordStore(resolved_settings.keyword_index_path)
+
+
 def create_chunker(settings: Settings | None = None, embedding_model: EmbeddingModel | None = None):
     resolved_settings = settings or create_settings()
     strategy = _normalize_provider(resolved_settings.chunk_strategy)
@@ -88,13 +94,35 @@ def create_indexer(settings: Settings | None = None) -> Indexer:
         loader=DocumentLoader(),
         splitter=create_chunker(resolved_settings, embedding_model=embedding_model),
         vectorstore=create_vectorstore(resolved_settings, embedding_model=embedding_model),
+        keyword_store=create_keyword_store(resolved_settings),
+    )
+
+
+def create_retriever(settings: Settings | None = None):
+    resolved_settings = settings or create_settings()
+    strategy = _normalize_provider(resolved_settings.search_strategy)
+
+    if strategy == "vector":
+        return Retriever(create_vectorstore(resolved_settings))
+    if strategy == "keyword":
+        return KeywordRetriever(create_keyword_store(resolved_settings))
+    if strategy == "hybrid":
+        return HybridRetriever(
+            vectorstore=create_vectorstore(resolved_settings),
+            keyword_store=create_keyword_store(resolved_settings),
+            vector_weight=resolved_settings.hybrid_vector_weight,
+            candidate_multiplier=resolved_settings.hybrid_candidate_multiplier,
+        )
+
+    raise ConfigurationError(
+        f"Unsupported search strategy: {resolved_settings.search_strategy}. "
+        "Supported strategies: vector, keyword, hybrid."
     )
 
 
 def create_pipeline(settings: Settings | None = None, require_gen: bool = False) -> RAGPipeline:
     resolved_settings = settings or create_settings()
-    vectorstore = create_vectorstore(resolved_settings)
-    retriever = Retriever(vectorstore)
+    retriever = create_retriever(resolved_settings)
     generator = (
         Generator(
             create_chat_model(resolved_settings),
@@ -108,8 +136,7 @@ def create_pipeline(settings: Settings | None = None, require_gen: bool = False)
 
 def create_agentic_service(settings: Settings | None = None) -> AgenticService:
     resolved_settings = settings or create_settings()
-    vectorstore = create_vectorstore(resolved_settings)
-    retriever = Retriever(vectorstore)
+    retriever = create_retriever(resolved_settings)
     chat_model = create_chat_model(resolved_settings)
     context_builder = ContextBuilder(max_chars=resolved_settings.agentic_context_max_chars)
     generator = Generator(chat_model, context_builder=context_builder)

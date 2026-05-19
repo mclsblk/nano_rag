@@ -148,6 +148,8 @@ class DocumentBuilder:
                 continue
             if is_pdf and _PDF_PAGE_MARKER_RE.match(cleaned_line):
                 continue
+            if len(cleaned_line) <= 4 and _pure_number_line(cleaned_line):
+                continue
             lines.append(cleaned_line)
 
         if not lines:
@@ -237,3 +239,7 @@ def _is_cjk(character: str) -> bool:
 
 def _word_count(text: str) -> int:
     return sum(1 for character in text if character.isalnum())
+
+_PURE_NUMBER_PATTERN = re.compile(rf"^[（(]?\s*{_NUMBER_PATTERN}\s*[）)]?$")
+def _pure_number_line(text: str) -> bool:
+    return bool(_PURE_NUMBER_PATTERN.match(text))

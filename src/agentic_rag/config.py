@@ -20,6 +20,10 @@ class Settings(BaseModel):
     openai_compatible_timeout_seconds: float = 30.0
     chroma_persist_dir: Path = Field(default=Path("./storage/chroma"))
     chroma_collection: str = "agentic_rag"
+    search_strategy: str = "hybrid"
+    keyword_index_path: Path = Field(default=Path("./storage/keyword.sqlite"))
+    hybrid_vector_weight: float = Field(default=0.65, ge=0.0, le=1.0)
+    hybrid_candidate_multiplier: int = Field(default=4, ge=1)
     chunk_strategy: str = "semantic"
     chunk_size_chars: int = Field(default=800, ge=1)
     chunk_overlap_chars: int = Field(default=120, ge=0)
@@ -95,6 +99,25 @@ def load_settings() -> Settings:
             )
         ),
         chroma_collection=_env_string("CHROMA_COLLECTION", Settings.model_fields["chroma_collection"].default),
+        search_strategy=_env_string("SEARCH_STRATEGY", Settings.model_fields["search_strategy"].default),
+        keyword_index_path=Path(
+            os.getenv(
+                "KEYWORD_INDEX_PATH",
+                str(Settings.model_fields["keyword_index_path"].default),
+            )
+        ),
+        hybrid_vector_weight=float(
+            os.getenv(
+                "HYBRID_VECTOR_WEIGHT",
+                str(Settings.model_fields["hybrid_vector_weight"].default),
+            )
+        ),
+        hybrid_candidate_multiplier=int(
+            os.getenv(
+                "HYBRID_CANDIDATE_MULTIPLIER",
+                str(Settings.model_fields["hybrid_candidate_multiplier"].default),
+            )
+        ),
         chunk_strategy=_env_string("CHUNK_STRATEGY", Settings.model_fields["chunk_strategy"].default),
         chunk_size_chars=int(
             os.getenv(

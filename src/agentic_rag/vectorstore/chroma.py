@@ -72,6 +72,43 @@ class ChromaVectorStore(VectorStore):
 
         return len(ids)
 
+    def get_by_ids(self, ids: list[str]) -> list[SearchResult]:
+        if not ids:
+            return []
+
+        try:
+            raw = self.collection.get(
+                ids=ids,
+                include=["documents", "metadatas"],
+            )
+        except Exception as exc:
+            raise VectorStoreError("Failed to get chunks from Chroma by id.") from exc
+
+        results_by_id = {result.id: result for result in self._parse_get_results(raw)}
+        return [results_by_id[result_id] for result_id in ids if result_id in results_by_id]
+
+    def count_chunks(self) -> int:
+        try:
+            return int(self.collection.count())
+        except Exception as exc:
+            raise VectorStoreError("Failed to count chunks in Chroma.") from exc
+
+    def list_sources(self) -> list[str]:
+        try:
+            raw = self.collection.get(include=["metadatas"])
+        except Exception as exc:
+            raise VectorStoreError("Failed to list sources in Chroma.") from exc
+
+        sources: set[str] = set()
+        for metadata in raw.get("metadatas") or []:
+            if not isinstance(metadata, dict):
+                continue
+            source = metadata.get("source")
+            if isinstance(source, str) and source:
+                sources.add(source)
+
+        return sorted(sources)
+
     def similarity_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         if top_k <= 0:
             raise VectorStoreError("top_k must be greater than 0.")
@@ -89,17 +126,6 @@ class ChromaVectorStore(VectorStore):
             raise VectorStoreError("Failed to query Chroma.") from exc
 
         return self._parse_query_results(raw)
-
-    def estimate_confidence(self, results: list[SearchResult]) -> str:
-        if not results:
-            return "low"
-
-        best_score = max((result.score or 0.0) for result in results)
-        if best_score >= 0.75:
-            return "high"
-        if best_score >= 0.45:
-            return "medium"
-        return "low"
 
     def _parse_query_results(self, raw: dict[str, Any]) -> list[SearchResult]:
         ids = _first_result_list(raw.get("ids"))
@@ -119,6 +145,25 @@ class ChromaVectorStore(VectorStore):
                     id=str(result_id),
                     content=str(documents[index]) if index < len(documents) else "",
                     score=_normalize_distance(distance),
+                    source=metadata.get("source") if isinstance(metadata.get("source"), str) else None,
+                    metadata=metadata,
+                )
+            )
+
+        return results
+
+    def _parse_get_results(self, raw: dict[str, Any]) -> list[SearchResult]:
+        ids = _first_result_list(raw.get("ids"))
+        documents = _first_result_list(raw.get("documents"))
+        metadatas = _first_result_list(raw.get("metadatas"))
+
+        results: list[SearchResult] = []
+        for index, result_id in enumerate(ids):
+            metadata = dict(metadatas[index] or {}) if index < len(metadatas) else {}
+            results.append(
+                SearchResult(
+                    id=str(result_id),
+                    content=str(documents[index]) if index < len(documents) else "",
                     source=metadata.get("source") if isinstance(metadata.get("source"), str) else None,
                     metadata=metadata,
                 )
