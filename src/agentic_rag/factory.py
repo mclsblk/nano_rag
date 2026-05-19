@@ -1,4 +1,4 @@
-from agentic_rag.agent import AgentPolicy, AgenticService, MultiQueryGenerator, QueryRewriter
+from agentic_rag.agent import AgentPolicy, AgenticService, LangGraphAgenticService, MultiQueryGenerator, QueryRewriter
 from agentic_rag.config import Settings, load_settings
 from agentic_rag.core import ConfigurationError
 from agentic_rag.document import DocumentLoader, SemanticChunker, TextSplitter
@@ -10,6 +10,8 @@ from agentic_rag.models import (
     OllamaEmbeddingModel,
     OpenAICompatibleChatModel,
     OpenAICompatibleEmbeddingModel,
+    OpenAICompatibleVisionModel,
+    VisionModel,
 )
 from agentic_rag.output import OutputFormatter
 from agentic_rag.rag import ContextBuilder, Generator, HybridRetriever, Indexer, KeywordRetriever, RAGPipeline, Retriever
@@ -50,6 +52,19 @@ def create_embedding_model(settings: Settings | None = None) -> EmbeddingModel:
     )
 
 
+def create_vision_model(settings: Settings | None = None) -> VisionModel:
+    resolved_settings = settings or create_settings()
+    provider = _normalize_provider(resolved_settings.visual_model_provider)
+
+    if provider == "openai_compatible":
+        return OpenAICompatibleVisionModel(resolved_settings)
+
+    raise ConfigurationError(
+        f"Unsupported visual model provider: {resolved_settings.visual_model_provider}. "
+        "Supported providers: openai_compatible."
+    )
+
+
 def create_vectorstore(settings: Settings | None = None, embedding_model: EmbeddingModel | None = None) -> ChromaVectorStore:
     resolved_settings = settings or create_settings()
     resolved_embedding_model = embedding_model or create_embedding_model(resolved_settings)
@@ -87,11 +102,17 @@ def create_chunker(settings: Settings | None = None, embedding_model: EmbeddingM
     )
 
 
-def create_indexer(settings: Settings | None = None) -> Indexer:
+def create_indexer(settings: Settings | None = None, load_strategy: str | None = None) -> Indexer:
     resolved_settings = settings or create_settings()
     embedding_model = create_embedding_model(resolved_settings)
+    resolved_load_strategy = _normalize_provider(load_strategy or resolved_settings.document_load_strategy)
+    vision_model = _LazyVisionModel(resolved_settings) if resolved_load_strategy in {"auto", "visual"} else None
     return Indexer(
-        loader=DocumentLoader(),
+        loader=DocumentLoader(
+            load_strategy=resolved_load_strategy,
+            vision_model=vision_model,
+            visual_min_text_chars=resolved_settings.visual_min_text_chars,
+        ),
         splitter=create_chunker(resolved_settings, embedding_model=embedding_model),
         vectorstore=create_vectorstore(resolved_settings, embedding_model=embedding_model),
         keyword_store=create_keyword_store(resolved_settings),
@@ -134,13 +155,23 @@ def create_pipeline(settings: Settings | None = None, require_gen: bool = False)
     return RAGPipeline(retriever=retriever, generator=generator)
 
 
-def create_agentic_service(settings: Settings | None = None) -> AgenticService:
+def create_agentic_service(settings: Settings | None = None, engine: str | None = None) -> AgenticService:
     resolved_settings = settings or create_settings()
+    resolved_engine = _normalize_provider(engine or resolved_settings.agentic_engine)
+    if resolved_engine not in {"langgraph", "service"}:
+        raise ConfigurationError(
+            f"Unsupported agentic engine: {engine or resolved_settings.agentic_engine}. "
+            "Supported engines: langgraph, service."
+        )
+    if resolved_engine == "langgraph":
+        _ensure_langgraph_available()
+
     retriever = create_retriever(resolved_settings)
     chat_model = create_chat_model(resolved_settings)
     context_builder = ContextBuilder(max_chars=resolved_settings.agentic_context_max_chars)
     generator = Generator(chat_model, context_builder=context_builder)
-    return AgenticService(
+
+    service_kwargs = dict(
         retriever=retriever,
         generator=generator,
         query_rewriter=QueryRewriter(chat_model),
@@ -149,6 +180,11 @@ def create_agentic_service(settings: Settings | None = None) -> AgenticService:
         multi_query_count=resolved_settings.agentic_multi_query_count,
     )
 
+    if resolved_engine == "service":
+        return AgenticService(**service_kwargs)
+    if resolved_engine == "langgraph":
+        return LangGraphAgenticService(**service_kwargs)
+
 
 def create_formatter(content_preview_chars: int | None = None) -> OutputFormatter:
     return OutputFormatter(content_preview_chars=content_preview_chars)
@@ -156,3 +192,24 @@ def create_formatter(content_preview_chars: int | None = None) -> OutputFormatte
 
 def _normalize_provider(provider: str) -> str:
     return provider.strip().lower().replace("-", "_")
+
+
+def _ensure_langgraph_available() -> None:
+    try:
+        import langgraph  # noqa: F401
+    except ImportError as exc:
+        raise ConfigurationError(
+            "AGENTIC_ENGINE=langgraph requires the optional langgraph dependency. "
+            "Install it with `python -m pip install -e '.[agentic]'`."
+        ) from exc
+
+
+class _LazyVisionModel(VisionModel):
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self._model: VisionModel | None = None
+
+    def extract_text(self, image_bytes: bytes, *, mime_type: str) -> str:
+        if self._model is None:
+            self._model = create_vision_model(self.settings)
+        return self._model.extract_text(image_bytes, mime_type=mime_type)

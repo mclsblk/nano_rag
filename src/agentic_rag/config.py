@@ -17,7 +17,11 @@ class Settings(BaseModel):
     openai_compatible_api_key: str = ""
     openai_compatible_chat_model: str = ""
     openai_compatible_embedding_model: str = ""
+    openai_compatible_visual_model: str = ""
     openai_compatible_timeout_seconds: float = 30.0
+    document_load_strategy: str = "text"
+    visual_model_provider: str = "openai_compatible"
+    visual_min_text_chars: int = Field(default=40, ge=0)
     chroma_persist_dir: Path = Field(default=Path("./storage/chroma"))
     chroma_collection: str = "agentic_rag"
     search_strategy: str = "hybrid"
@@ -35,6 +39,7 @@ class Settings(BaseModel):
     agentic_context_min_chars: int = Field(default=80, ge=0)
     agentic_context_max_chars: int = Field(default=4000, ge=1)
     agentic_multi_query_count: int = Field(default=3, ge=1)
+    agentic_engine: str = "service"
 
 
 def load_settings() -> Settings:
@@ -86,10 +91,29 @@ def load_settings() -> Settings:
             Settings.model_fields["openai_compatible_embedding_model"].default,
             allow_empty=True,
         ),
+        openai_compatible_visual_model=_env_string(
+            "OPENAI_COMPATIBLE_VISUAL_MODEL",
+            Settings.model_fields["openai_compatible_visual_model"].default,
+            allow_empty=True,
+        ),
         openai_compatible_timeout_seconds=float(
             os.getenv(
                 "OPENAI_COMPATIBLE_TIMEOUT_SECONDS",
                 str(Settings.model_fields["openai_compatible_timeout_seconds"].default),
+            )
+        ),
+        document_load_strategy=_env_string(
+            "DOCUMENT_LOAD_STRATEGY",
+            Settings.model_fields["document_load_strategy"].default,
+        ),
+        visual_model_provider=_env_string(
+            "VISUAL_MODEL_PROVIDER",
+            Settings.model_fields["visual_model_provider"].default,
+        ),
+        visual_min_text_chars=int(
+            os.getenv(
+                "VISUAL_MIN_TEXT_CHARS",
+                str(Settings.model_fields["visual_min_text_chars"].default),
             )
         ),
         chroma_persist_dir=Path(
@@ -179,6 +203,7 @@ def load_settings() -> Settings:
                 str(Settings.model_fields["agentic_multi_query_count"].default),
             )
         ),
+        agentic_engine=_env_string("AGENTIC_ENGINE", Settings.model_fields["agentic_engine"].default),
     )
 
 

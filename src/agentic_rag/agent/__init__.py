@@ -4,6 +4,7 @@ from agentic_rag.agent.policy import (
     NO_RESULTS,
     AgentPolicy,
 )
+from agentic_rag.agent.graph import LangGraphAgenticService
 from agentic_rag.agent.query import MultiQueryGenerator, QueryRewriter
 from agentic_rag.agent.retrieval import MultiQueryRetriever
 from agentic_rag.agent.service import (
@@ -25,6 +26,7 @@ __all__ = [
     "BEST_SCORE_BELOW_MIN_SCORE",
     "CONTENT_CHARS_BELOW_MIN_CHARS",
     "GENERATION_FAILED",
+    "LangGraphAgenticService",
     "MultiQueryGenerator",
     "MultiQueryRetriever",
     "NO_RESULTS",

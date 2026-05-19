@@ -69,7 +69,11 @@ class InspectResponse(CoreSchema):
     openai_compatible_base_url: str = ""
     openai_compatible_chat_model: str = ""
     openai_compatible_embedding_model: str = ""
+    openai_compatible_visual_model: str = ""
     openai_compatible_timeout_seconds: float | None = None
+    document_load_strategy: str = "text"
+    visual_model_provider: str = "openai_compatible"
+    visual_min_text_chars: int = Field(default=40, ge=0)
     chroma_persist_dir: str
     chroma_collection: str
     chroma_count: int = Field(ge=0)
@@ -77,3 +81,4 @@ class InspectResponse(CoreSchema):
     keyword_index_path: str = ""
     keyword_source_count: int = Field(default=0, ge=0)
     keyword_chunk_count: int = Field(default=0, ge=0)
+    agentic_engine: str = "service"

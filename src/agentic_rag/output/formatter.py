@@ -132,7 +132,11 @@ class OutputFormatter:
             f"openai_compatible_base_url={response.openai_compatible_base_url}",
             f"openai_compatible_chat_model={response.openai_compatible_chat_model}",
             f"openai_compatible_embedding_model={response.openai_compatible_embedding_model}",
+            f"openai_compatible_visual_model={response.openai_compatible_visual_model}",
             f"openai_compatible_timeout_seconds={response.openai_compatible_timeout_seconds}",
+            f"document_load_strategy={response.document_load_strategy}",
+            f"visual_model_provider={response.visual_model_provider}",
+            f"visual_min_text_chars={response.visual_min_text_chars}",
             f"chroma_persist_dir={response.chroma_persist_dir}",
             f"chroma_collection={response.chroma_collection}",
             f"chroma_count={response.chroma_count}",
@@ -140,6 +144,7 @@ class OutputFormatter:
             f"keyword_index_path={response.keyword_index_path}",
             f"keyword_source_count={response.keyword_source_count}",
             f"keyword_chunk_count={response.keyword_chunk_count}",
+            f"agentic_engine={response.agentic_engine}",
         ]
         return "\n".join(lines)
 

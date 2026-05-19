@@ -20,6 +20,12 @@ class EmbeddingModel(ABC):
         raise NotImplementedError
 
 
+class VisionModel(ABC):
+    @abstractmethod
+    def extract_text(self, image_bytes: bytes, *, mime_type: str) -> str:
+        raise NotImplementedError
+
+
 def extract_chat_content(response: dict[str, Any]) -> str:
     content = _extract_ollama_content(response)
     if content is not None:

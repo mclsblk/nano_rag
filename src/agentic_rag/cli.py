@@ -18,11 +18,12 @@ app = typer.Typer(help="CLI-first local Agentic RAG system.")
 @app.command()
 def ingest(
     path: str,
+    loader: str | None = typer.Option(None, "--loader", help="Document load strategy: text, auto, or visual."),
     json_output: bool = typer.Option(False, "--json", help="Output stable JSON."),
 ) -> None:
     """Ingest documents into the local knowledge base."""
     def command() -> None:
-        response = create_indexer().ingest_with_report(path)
+        response = create_indexer(load_strategy=loader).ingest_with_report(path)
         typer.echo(create_formatter().format_response(response, as_json=json_output))
 
     _run(command)
@@ -60,13 +61,14 @@ def ask(
     query: str,
     top_k: int = typer.Option(5, "--top-k", help="Number of search results to use.", min=1),
     agentic: bool = typer.Option(False, "--agentic", help="Use agentic query rewrite and multi-query retrieval."),
+    engine: str | None = typer.Option(None, "--engine", help="Agentic engine: service or langgraph."),
     debug: bool = typer.Option(False, "--debug", help="Show agentic debug information when --agentic is enabled."),
     json_output: bool = typer.Option(False, "--json", help="Output stable JSON."),
 ) -> None:
     """Ask a question using retrieval-augmented generation."""
     def command() -> None:
         if agentic:
-            service = create_agentic_service()
+            service = create_agentic_service(engine=engine)
             response = service.ask_with_debug(query, top_k=top_k) if debug else service.ask(query, top_k=top_k)
         else:
             response = create_pipeline(require_gen=True).ask(query, top_k=top_k)
@@ -96,7 +98,11 @@ def inspect(
             openai_compatible_base_url=settings.openai_compatible_base_url,
             openai_compatible_chat_model=settings.openai_compatible_chat_model,
             openai_compatible_embedding_model=settings.openai_compatible_embedding_model,
+            openai_compatible_visual_model=settings.openai_compatible_visual_model,
             openai_compatible_timeout_seconds=settings.openai_compatible_timeout_seconds,
+            document_load_strategy=settings.document_load_strategy,
+            visual_model_provider=settings.visual_model_provider,
+            visual_min_text_chars=settings.visual_min_text_chars,
             chroma_persist_dir=str(settings.chroma_persist_dir),
             chroma_collection=settings.chroma_collection,
             chroma_count=vectorstore.count_chunks(),
@@ -104,6 +110,7 @@ def inspect(
             keyword_index_path=str(settings.keyword_index_path),
             keyword_source_count=keyword_store.count_sources(),
             keyword_chunk_count=keyword_store.count_chunks(),
+            agentic_engine=settings.agentic_engine,
         )
         typer.echo(create_formatter().format_response(response, as_json=json_output))
 
