@@ -5,7 +5,7 @@ import chromadb
 
 from agentic_rag.config import Settings, load_settings
 from agentic_rag.core import Chunk, ModelError, SearchResult, VectorStoreError
-from agentic_rag.models import EmbeddingModel, OllamaEmbeddingModel
+from agentic_rag.models import EmbeddingModel
 from agentic_rag.vectorstore.base import VectorStore
 
 
@@ -16,14 +16,17 @@ class ChromaVectorStore(VectorStore):
         settings: Settings | None = None,
     ) -> None:
         self.settings = settings or load_settings()
-        self.embedding_model = embedding_model or OllamaEmbeddingModel(self.settings)
-        self.persist_dir = Path(self.settings.chroma_persist_dir)
+        if embedding_model is None:
+            raise VectorStoreError("ChromaVectorStore requires an explicit embedding model.")
+        self.embedding_model = embedding_model
+        vectorstore_settings = self.settings.vectorstore
+        self.persist_dir = Path(vectorstore_settings.chroma_persist_dir)
 
         try:
             self.persist_dir.mkdir(parents=True, exist_ok=True)
             self.client = chromadb.PersistentClient(path=str(self.persist_dir))
             self.collection = self.client.get_or_create_collection(
-                name=self.settings.chroma_collection,
+                name=vectorstore_settings.chroma_collection,
             )
         except Exception as exc:
             raise VectorStoreError("Failed to initialize Chroma vector store.") from exc

@@ -3,7 +3,14 @@ from typing import Any, TypedDict
 from agentic_rag.agent.policy import AgentPolicy
 from agentic_rag.agent.query import MultiQueryGenerator, QueryRewriter
 from agentic_rag.agent.retrieval import MultiQueryRetriever
-from agentic_rag.agent.service import ANSWER_NOT_SUPPORTED, AgenticService, _is_unsupported_answer, _source_ids
+from agentic_rag.agent.service import (
+    AgenticService,
+    generate_answer_step,
+    generate_retrieval_queries_step,
+    judge_context_step,
+    retrieve_step,
+    rewrite_query_step,
+)
 from agentic_rag.agent.state import AgentState
 from agentic_rag.core import ConfigurationError
 from agentic_rag.rag import Generator, Retriever
@@ -70,56 +77,27 @@ class LangGraphAgenticService(AgenticService):
         return graph.compile()
 
     def _rewrite_query(self, graph_state: _GraphState) -> _GraphState:
-        state = graph_state["agent_state"]
-        state.rewritten_query = self.query_rewriter.rewrite(state.query)
+        rewrite_query_step(graph_state["agent_state"], self.query_rewriter)
         return graph_state
 
     def _generate_retrieval_queries(self, graph_state: _GraphState) -> _GraphState:
-        state = graph_state["agent_state"]
-        state.retrieval_queries = self.multi_query_generator.generate(
-            state.query,
-            rewritten_query=state.rewritten_query,
-            count=self.multi_query_count,
+        generate_retrieval_queries_step(
+            graph_state["agent_state"],
+            self.multi_query_generator,
+            self.multi_query_count,
         )
         return graph_state
 
     def _retrieve(self, graph_state: _GraphState) -> _GraphState:
-        state = graph_state["agent_state"]
-        top_k = graph_state["top_k"]
-        state.results = self.multi_query_retriever.search(
-            state.retrieval_queries,
-            top_k=top_k,
-            max_results=top_k,
-        )
+        retrieve_step(graph_state["agent_state"], self.multi_query_retriever, graph_state["top_k"])
         return graph_state
 
     def _judge_context(self, graph_state: _GraphState) -> _GraphState:
-        state = graph_state["agent_state"]
-        selected_results = self.policy.select_results_for_context(state.results)
-        state.fallback_reason = self.policy.fallback_reason(state.results)
-        state.context_sufficient = state.fallback_reason is None
-        state.selected_source_ids = _source_ids(selected_results)
+        judge_context_step(graph_state["agent_state"], self.policy)
         return graph_state
 
     def _generate_or_fallback_node(self, graph_state: _GraphState) -> _GraphState:
-        state = graph_state["agent_state"]
-        selected_results = self.policy.select_results_for_context(state.results)
-        answer, generation_failure_reason = self._generate_or_fallback(
-            state.query,
-            selected_results,
-            state.context_sufficient,
-        )
-
-        if generation_failure_reason is not None:
-            state.context_sufficient = False
-            state.fallback_reason = generation_failure_reason
-        elif state.context_sufficient and _is_unsupported_answer(answer):
-            answer = self.policy.fallback_answer()
-            state.context_sufficient = False
-            state.fallback_reason = ANSWER_NOT_SUPPORTED
-
-        state.answer = answer
-        state.confidence = self.retriever.estimate_confidence(state.results)
+        generate_answer_step(graph_state["agent_state"], self.policy, self.generator, self.retriever)
         return graph_state
 
     def _build_response(self, graph_state: _GraphState) -> _GraphState:

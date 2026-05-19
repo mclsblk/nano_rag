@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from agentic_rag.agent import AgenticAskResult
+from agentic_rag.agent.service import AgenticAskResult
 from agentic_rag.core import (
     AnswerResponse,
     DeIngestResponse,

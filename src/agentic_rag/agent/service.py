@@ -27,6 +27,85 @@ class AgenticAskResult:
     debug: AgentDebugInfo
 
 
+def rewrite_query_step(state: AgentState, query_rewriter: QueryRewriter) -> AgentState:
+    state.rewritten_query = query_rewriter.rewrite(state.query)
+    return state
+
+
+def generate_retrieval_queries_step(
+    state: AgentState,
+    multi_query_generator: MultiQueryGenerator,
+    multi_query_count: int,
+) -> AgentState:
+    state.retrieval_queries = multi_query_generator.generate(
+        state.query,
+        rewritten_query=state.rewritten_query,
+        count=multi_query_count,
+    )
+    return state
+
+
+def retrieve_step(state: AgentState, multi_query_retriever: MultiQueryRetriever, top_k: int) -> AgentState:
+    state.results = multi_query_retriever.search(
+        state.retrieval_queries,
+        top_k=top_k,
+        max_results=top_k,
+    )
+    return state
+
+
+def judge_context_step(state: AgentState, policy: AgentPolicy) -> AgentState:
+    selected_results = policy.select_results_for_context(state.results)
+    state.fallback_reason = policy.fallback_reason(state.results)
+    state.context_sufficient = state.fallback_reason is None
+    state.selected_source_ids = source_ids(selected_results)
+    return state
+
+
+def generate_answer_step(
+    state: AgentState,
+    policy: AgentPolicy,
+    generator: Generator,
+    retriever: Retriever,
+) -> AgentState:
+    selected_results = policy.select_results_for_context(state.results)
+    answer, generation_failure_reason = generate_or_fallback(
+        policy=policy,
+        generator=generator,
+        query=state.query,
+        selected_results=selected_results,
+        context_sufficient=state.context_sufficient,
+    )
+
+    if generation_failure_reason is not None:
+        state.context_sufficient = False
+        state.fallback_reason = generation_failure_reason
+    elif state.context_sufficient and is_unsupported_answer(answer):
+        answer = policy.fallback_answer()
+        state.context_sufficient = False
+        state.fallback_reason = ANSWER_NOT_SUPPORTED
+
+    state.answer = answer
+    state.confidence = retriever.estimate_confidence(state.results)
+    return state
+
+
+def generate_or_fallback(
+    policy: AgentPolicy,
+    generator: Generator,
+    query: str,
+    selected_results: list[SearchResult],
+    context_sufficient: bool,
+) -> tuple[str, str | None]:
+    if not context_sufficient:
+        return policy.fallback_answer(), None
+
+    try:
+        return generator.generate(query, selected_results), None
+    except Exception:
+        return policy.fallback_answer(), GENERATION_FAILED
+
+
 class AgenticService:
     def __init__(
         self,
@@ -73,62 +152,20 @@ class AgenticService:
         )
 
     def run(self, query: str, top_k: int = 5) -> AgentState:
-        rewritten_query = self.query_rewriter.rewrite(query)
-        retrieval_queries = self.multi_query_generator.generate(
-            query,
-            rewritten_query=rewritten_query,
-            count=self.multi_query_count,
-        )
-        results = self.multi_query_retriever.search(
-            retrieval_queries,
-            top_k=top_k,
-            max_results=top_k,
-        )
-        selected_results = self.policy.select_results_for_context(results)
-        fallback_reason = self.policy.fallback_reason(results)
-        context_sufficient = fallback_reason is None
-        answer, generation_failure_reason = self._generate_or_fallback(query, selected_results, context_sufficient)
-
-        if generation_failure_reason is not None:
-            context_sufficient = False
-            fallback_reason = generation_failure_reason
-        elif context_sufficient and _is_unsupported_answer(answer):
-            answer = self.policy.fallback_answer()
-            context_sufficient = False
-            fallback_reason = ANSWER_NOT_SUPPORTED
-
-        return AgentState(
-            query=query,
-            rewritten_query=rewritten_query,
-            retrieval_queries=retrieval_queries,
-            results=results,
-            answer=answer,
-            confidence=self.retriever.estimate_confidence(results),
-            context_sufficient=context_sufficient,
-            fallback_reason=fallback_reason,
-            selected_source_ids=_source_ids(selected_results),
-        )
-
-    def _generate_or_fallback(
-        self,
-        query: str,
-        selected_results: list[SearchResult],
-        context_sufficient: bool,
-    ) -> tuple[str, str | None]:
-        if not context_sufficient:
-            return self.policy.fallback_answer(), None
-
-        try:
-            return self.generator.generate(query, selected_results), None
-        except Exception:
-            return self.policy.fallback_answer(), GENERATION_FAILED
+        state = AgentState(query=query)
+        rewrite_query_step(state, self.query_rewriter)
+        generate_retrieval_queries_step(state, self.multi_query_generator, self.multi_query_count)
+        retrieve_step(state, self.multi_query_retriever, top_k)
+        judge_context_step(state, self.policy)
+        generate_answer_step(state, self.policy, self.generator, self.retriever)
+        return state
 
 
-def _source_ids(results: list[SearchResult]) -> list[str]:
+def source_ids(results: list[SearchResult]) -> list[str]:
     return [result.id for result in results]
 
 
-def _is_unsupported_answer(answer: str) -> bool:
+def is_unsupported_answer(answer: str) -> bool:
     normalized = answer.strip().casefold()
     unsupported_markers = [
         "无法从当前知识库中确定",

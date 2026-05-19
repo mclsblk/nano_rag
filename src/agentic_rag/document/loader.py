@@ -214,9 +214,6 @@ class DocumentLoader:
         }
 
     def _add_loader_metadata(self, metadata: dict[str, object], *, visual_parsed: bool) -> None:
-        if self.load_strategy == "text" and not visual_parsed:
-            return
-
         metadata["loader_strategy"] = self.load_strategy
         metadata["visual_parsed"] = visual_parsed
 

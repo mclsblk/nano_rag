@@ -20,9 +20,10 @@ class AgentPolicy:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "AgentPolicy":
+        agentic = settings.agentic
         return cls(
-            min_score=settings.agentic_context_min_score,
-            min_chars=settings.agentic_context_min_chars,
+            min_score=agentic.context_min_score,
+            min_chars=agentic.context_min_chars,
         )
 
     def is_context_sufficient(self, results: list[SearchResult]) -> bool:

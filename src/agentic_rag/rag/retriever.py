@@ -1,6 +1,9 @@
+from collections.abc import Callable
 from typing import Any
 
+from agentic_rag.config import Settings
 from agentic_rag.core import IndexConsistencyError, SearchResponse, SearchResult
+from agentic_rag.core.exceptions import ConfigurationError
 from agentic_rag.keyword import KeywordStore
 from agentic_rag.vectorstore import VectorStore
 
@@ -92,6 +95,31 @@ class HybridRetriever:
             "Hybrid search requires Chroma and SQLite keyword indexes to contain the same sources and chunks. "
             f"{'; '.join(details)}. Run `rag de-ingest <source>` and ingest the source again."
         )
+
+
+def create_retriever(
+    settings: Settings,
+    vectorstore_factory: Callable[[], VectorStore],
+    keyword_store_factory: Callable[[], KeywordStore],
+) -> Retriever | KeywordRetriever | HybridRetriever:
+    search = settings.search
+    strategy = search.strategy.strip().lower().replace("-", "_")
+
+    if strategy == "vector":
+        return Retriever(vectorstore_factory())
+    if strategy == "keyword":
+        return KeywordRetriever(keyword_store_factory())
+    if strategy == "hybrid":
+        return HybridRetriever(
+            vectorstore=vectorstore_factory(),
+            keyword_store=keyword_store_factory(),
+            vector_weight=search.hybrid_vector_weight,
+            candidate_multiplier=search.hybrid_candidate_multiplier,
+        )
+
+    raise ConfigurationError(
+        f"Unsupported search strategy: {search.strategy}. Supported strategies: vector, keyword, hybrid."
+    )
 
 
 def _as_vector_result(result: SearchResult) -> SearchResult:
