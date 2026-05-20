@@ -17,7 +17,7 @@ class MultiQueryRetriever:
 
         results = sorted(merged.values(), key=lambda result: result.score or 0.0, reverse=True)
         if max_results is not None:
-            return results[:max(0, max_results)]
+            return results[:max_results]
         return results
 
 

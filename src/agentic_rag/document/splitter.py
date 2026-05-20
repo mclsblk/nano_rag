@@ -1,4 +1,5 @@
 from agentic_rag.core import Chunk, Document, DocumentError
+from agentic_rag.document.cleaning import _DocumentCleaner
 
 
 class TextSplitter:
@@ -12,14 +13,21 @@ class TextSplitter:
 
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self._cleaner = _DocumentCleaner()
 
     def split_documents(self, documents: list[Document]) -> list[Chunk]:
         chunks: list[Chunk] = []
-        for document in documents:
-            chunks.extend(self.split_document(document))
+        for document in self._cleaner.clean_documents(documents):
+            chunks.extend(self._split_clean_document(document))
         return chunks
 
     def split_document(self, document: Document) -> list[Chunk]:
+        cleaned_documents = self._cleaner.clean_documents([document])
+        if not cleaned_documents:
+            return []
+        return self._split_clean_document(cleaned_documents[0])
+
+    def _split_clean_document(self, document: Document) -> list[Chunk]:
         content = document.content
         if not content:
             return []

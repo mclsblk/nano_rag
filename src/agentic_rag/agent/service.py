@@ -117,9 +117,6 @@ class AgenticService:
         multi_query_retriever: MultiQueryRetriever | None = None,
         multi_query_count: int = 3,
     ) -> None:
-        if multi_query_count <= 0:
-            raise ValueError("multi_query_count must be greater than 0.")
-
         self.retriever = retriever
         self.generator = generator
         self.query_rewriter = query_rewriter

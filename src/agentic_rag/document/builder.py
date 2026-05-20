@@ -3,6 +3,7 @@ import re
 from typing import Any
 
 from agentic_rag.core import Document
+from agentic_rag.document.cleaning import _DocumentCleaner
 
 
 @dataclass(frozen=True)
@@ -40,11 +41,6 @@ _HARD_BREAK_RE = re.compile(
     re.IGNORECASE | re.MULTILINE | re.VERBOSE,
 )
 _HARD_BREAK_KEY_CLEAN_RE = re.compile(r"[\s:：.\-、，,。)\]】）]+")
-_DECORATIVE_LINE_RE = re.compile(r"^\s*(?:[-_=*#~·•—–—|+]{3,}|(?:[<《【\[]\s*[-_=*#~·•—–—|+]{2,}\s*[>》】\]])+)\s*$")
-_PDF_PAGE_MARKER_RE = re.compile(
-    rf"^\s*(?:第\s*{_NUMBER_PATTERN}\s*页|Page\s*\d+(?:\s*/\s*\d+)?|\d+\s*/\s*\d+|[-–—]\s*\d{{1,4}}\s*[-–—])\s*$",
-    re.IGNORECASE,
-)
 _SPACES_RE = re.compile(r"[ \t\f\v]+")
 
 
@@ -56,10 +52,11 @@ class DocumentBuilder:
     ) -> None:
         self.block_min_chars = block_min_chars
         self.block_max_chars = block_max_chars
+        self._cleaner = _DocumentCleaner()
 
     def build_documents(self, documents: list[Document]) -> list[BuiltSection]:
         sections: list[BuiltSection] = []
-        for document in documents:
+        for document in self._cleaner.clean_documents(documents):
             sections.extend(self._build_sections(document))
         return sections
 
@@ -143,12 +140,6 @@ class DocumentBuilder:
         for line in raw_block.split("\n"):
             cleaned_line = _SPACES_RE.sub(" ", line.strip())
             if not cleaned_line:
-                continue
-            if _DECORATIVE_LINE_RE.match(cleaned_line):
-                continue
-            if is_pdf and _PDF_PAGE_MARKER_RE.match(cleaned_line):
-                continue
-            if len(cleaned_line) <= 4 and _pure_number_line(cleaned_line):
                 continue
             lines.append(cleaned_line)
 
@@ -239,7 +230,3 @@ def _is_cjk(character: str) -> bool:
 
 def _word_count(text: str) -> int:
     return sum(1 for character in text if character.isalnum())
-
-_PURE_NUMBER_PATTERN = re.compile(rf"^[（(]?\s*{_NUMBER_PATTERN}\s*[）)]?$")
-def _pure_number_line(text: str) -> bool:
-    return bool(_PURE_NUMBER_PATTERN.match(text))
