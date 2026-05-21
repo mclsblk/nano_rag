@@ -2,7 +2,7 @@ from typing import Any
 
 import requests
 
-from agentic_rag.config import Settings, load_settings
+from agentic_rag.config import ModelSettings, Settings, load_settings
 from agentic_rag.core import ModelError
 from agentic_rag.models.base import ChatModel, EmbeddingModel
 
@@ -10,13 +10,14 @@ from agentic_rag.models.base import ChatModel, EmbeddingModel
 class OllamaChatModel(ChatModel):
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or load_settings()
+        self.model_settings = self.settings.models
 
     def chat(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         payload = {
-            "model": self.settings.ollama_chat_model,
+            "model": self.model_settings.ollama_chat_model,
             "messages": messages,
             "stream": False,
-            "think": self.settings.ollama_think,
+            "think": self.model_settings.ollama_think,
         }
         response = self._post("/api/chat", payload)
         if not isinstance(response.get("message"), dict):
@@ -24,19 +25,20 @@ class OllamaChatModel(ChatModel):
         return response
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return _post_ollama(self.settings, path, payload)
+        return _post_ollama(self.model_settings, path, payload)
 
 
 class OllamaEmbeddingModel(EmbeddingModel):
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or load_settings()
+        self.model_settings = self.settings.models
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [self.embed_query(text) for text in texts]
 
     def embed_query(self, text: str) -> list[float]:
         payload = {
-            "model": self.settings.ollama_embedding_model,
+            "model": self.model_settings.ollama_embedding_model,
             "prompt": text,
         }
         response = self._post("/api/embeddings", payload)
@@ -46,10 +48,10 @@ class OllamaEmbeddingModel(EmbeddingModel):
         return [float(value) for value in embedding]
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return _post_ollama(self.settings, path, payload)
+        return _post_ollama(self.model_settings, path, payload)
 
 
-def _post_ollama(settings: Settings, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _post_ollama(settings: ModelSettings, path: str, payload: dict[str, Any]) -> dict[str, Any]:
     base_url = settings.ollama_base_url.rstrip("/")
     url = f"{base_url}{path}"
     try:

@@ -1,26 +1,34 @@
+import base64
 from typing import Any
 
 from openai import OpenAI, OpenAIError
 
-from agentic_rag.config import Settings, load_settings
+from agentic_rag.config import ModelSettings, Settings, load_settings
 from agentic_rag.core import ConfigurationError, ModelError
-from agentic_rag.models.base import ChatModel, EmbeddingModel, extract_chat_content
+from agentic_rag.models.base import ChatModel, EmbeddingModel, VisionModel, extract_chat_content
+
+
+VISION_EXTRACTION_PROMPT = (
+    "Extract all readable text from the image. Preserve the original language, reading order, headings, "
+    "lists, and table text where possible. Return only the extracted text."
+)
 
 
 class OpenAICompatibleChatModel(ChatModel):
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or load_settings()
-        _require_base_url(self.settings)
+        self.model_settings = self.settings.models
+        _require_base_url(self.model_settings)
         _require_model(
-            self.settings.openai_compatible_chat_model,
+            self.model_settings.openai_compatible_chat_model,
             "OPENAI_COMPATIBLE_CHAT_MODEL",
         )
-        self.client = _create_client(self.settings)
+        self.client = _create_client(self.model_settings)
 
     def chat(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         try:
             response = self.client.chat.completions.create(
-                model=self.settings.openai_compatible_chat_model,
+                model=self.model_settings.openai_compatible_chat_model,
                 messages=messages,
                 stream=False,
             )
@@ -35,12 +43,13 @@ class OpenAICompatibleChatModel(ChatModel):
 class OpenAICompatibleEmbeddingModel(EmbeddingModel):
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or load_settings()
-        _require_base_url(self.settings)
+        self.model_settings = self.settings.models
+        _require_base_url(self.model_settings)
         _require_model(
-            self.settings.openai_compatible_embedding_model,
+            self.model_settings.openai_compatible_embedding_model,
             "OPENAI_COMPATIBLE_EMBEDDING_MODEL",
         )
-        self.client = _create_client(self.settings)
+        self.client = _create_client(self.model_settings)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -48,7 +57,7 @@ class OpenAICompatibleEmbeddingModel(EmbeddingModel):
 
         try:
             response = self.client.embeddings.create(
-                model=self.settings.openai_compatible_embedding_model,
+                model=self.model_settings.openai_compatible_embedding_model,
                 input=texts,
             )
         except OpenAIError as exc:
@@ -59,7 +68,7 @@ class OpenAICompatibleEmbeddingModel(EmbeddingModel):
     def embed_query(self, text: str) -> list[float]:
         try:
             response = self.client.embeddings.create(
-                model=self.settings.openai_compatible_embedding_model,
+                model=self.model_settings.openai_compatible_embedding_model,
                 input=text,
             )
         except OpenAIError as exc:
@@ -67,6 +76,55 @@ class OpenAICompatibleEmbeddingModel(EmbeddingModel):
 
         embeddings = _extract_embeddings(_response_to_dict(response), expected_count=1)
         return embeddings[0]
+
+
+class OpenAICompatibleVisionModel(VisionModel):
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or load_settings()
+        self.model_settings = self.settings.models
+        _require_base_url(self.model_settings)
+        _require_model(
+            self.model_settings.openai_compatible_visual_model,
+            "OPENAI_COMPATIBLE_VISUAL_MODEL",
+        )
+        self.client = _create_client(self.model_settings)
+
+    def extract_text(self, image_bytes: bytes, *, mime_type: str) -> str:
+        if not image_bytes:
+            return ""
+
+        encoded_image = base64.b64encode(image_bytes).decode("ascii")
+        image_url = f"data:{mime_type};base64,{encoded_image}"
+        messages = [
+            {
+                "role": "system",
+                "content": VISION_EXTRACTION_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Extract the readable text from this image.",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_url},
+                    },
+                ],
+            },
+        ]
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_settings.openai_compatible_visual_model,
+                messages=messages,
+                stream=False,
+            )
+        except OpenAIError as exc:
+            raise ModelError(f"OpenAI-compatible vision request failed: {exc}") from exc
+
+        return extract_chat_content(_response_to_dict(response))
 
 
 def _extract_embeddings(response: dict[str, Any], expected_count: int) -> list[list[float]]:
@@ -97,7 +155,7 @@ def _extract_embeddings(response: dict[str, Any], expected_count: int) -> list[l
     return [embedding for _, embedding in embeddings]
 
 
-def _require_base_url(settings: Settings) -> None:
+def _require_base_url(settings: ModelSettings) -> None:
     if not settings.openai_compatible_base_url.strip():
         raise ConfigurationError("OPENAI_COMPATIBLE_BASE_URL is required for openai_compatible provider.")
 
@@ -107,7 +165,7 @@ def _require_model(model_name: str, env_name: str) -> None:
         raise ConfigurationError(f"{env_name} is required for openai_compatible provider.")
 
 
-def _create_client(settings: Settings) -> OpenAI:
+def _create_client(settings: ModelSettings) -> OpenAI:
     return OpenAI(
         api_key=settings.openai_compatible_api_key.strip() or "unused",
         base_url=settings.openai_compatible_base_url.strip().rstrip("/"),

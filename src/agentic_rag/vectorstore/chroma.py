@@ -5,7 +5,7 @@ import chromadb
 
 from agentic_rag.config import Settings, load_settings
 from agentic_rag.core import Chunk, ModelError, SearchResult, VectorStoreError
-from agentic_rag.models import EmbeddingModel, OllamaEmbeddingModel
+from agentic_rag.models import EmbeddingModel
 from agentic_rag.vectorstore.base import VectorStore
 
 
@@ -16,14 +16,17 @@ class ChromaVectorStore(VectorStore):
         settings: Settings | None = None,
     ) -> None:
         self.settings = settings or load_settings()
-        self.embedding_model = embedding_model or OllamaEmbeddingModel(self.settings)
-        self.persist_dir = Path(self.settings.chroma_persist_dir)
+        if embedding_model is None:
+            raise VectorStoreError("ChromaVectorStore requires an explicit embedding model.")
+        self.embedding_model = embedding_model
+        vectorstore_settings = self.settings.vectorstore
+        self.persist_dir = Path(vectorstore_settings.chroma_persist_dir)
 
         try:
             self.persist_dir.mkdir(parents=True, exist_ok=True)
             self.client = chromadb.PersistentClient(path=str(self.persist_dir))
             self.collection = self.client.get_or_create_collection(
-                name=self.settings.chroma_collection,
+                name=vectorstore_settings.chroma_collection,
             )
         except Exception as exc:
             raise VectorStoreError("Failed to initialize Chroma vector store.") from exc
@@ -45,6 +48,70 @@ class ChromaVectorStore(VectorStore):
         except Exception as exc:
             raise VectorStoreError("Failed to add documents to Chroma.") from exc
 
+    def source_exists(self, source: str) -> bool:
+        try:
+            raw = self.collection.get(
+                where={"source": source},
+                limit=1,
+            )
+        except Exception as exc:
+            raise VectorStoreError(f"Failed to check source in Chroma: {source}") from exc
+
+        return bool(raw.get("ids"))
+
+    def delete_by_source(self, source: str) -> int:
+        try:
+            raw = self.collection.get(
+                where={"source": source},
+                include=["metadatas"],
+            )
+            ids = raw.get("ids") or []
+            if not ids:
+                return 0
+
+            self.collection.delete(where={"source": source})
+        except Exception as exc:
+            raise VectorStoreError(f"Failed to delete source from Chroma: {source}") from exc
+
+        return len(ids)
+
+    def get_by_ids(self, ids: list[str]) -> list[SearchResult]:
+        if not ids:
+            return []
+
+        try:
+            raw = self.collection.get(
+                ids=ids,
+                include=["documents", "metadatas"],
+            )
+        except Exception as exc:
+            raise VectorStoreError("Failed to get chunks from Chroma by id.") from exc
+
+        results_by_id = {result.id: result for result in self._parse_get_results(raw)}
+        return [results_by_id[result_id] for result_id in ids if result_id in results_by_id]
+
+    def count_chunks(self) -> int:
+        try:
+            return int(self.collection.count())
+        except Exception as exc:
+            raise VectorStoreError("Failed to count chunks in Chroma.") from exc
+
+    def list_sources(self) -> list[str]:
+        try:
+            raw = self.collection.get(include=["metadatas"])
+        except Exception as exc:
+            raise VectorStoreError("Failed to list sources in Chroma.") from exc
+
+        sources: set[str] = set()
+        for metadata in raw.get("metadatas") or []:
+            if not isinstance(metadata, dict):
+                continue
+            source = metadata.get("source")
+            if isinstance(source, str) and source:
+                sources.add(source)
+
+        return sorted(sources)
+
     def similarity_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         if top_k <= 0:
             raise VectorStoreError("top_k must be greater than 0.")
@@ -62,17 +129,6 @@ class ChromaVectorStore(VectorStore):
             raise VectorStoreError("Failed to query Chroma.") from exc
 
         return self._parse_query_results(raw)
-
-    def estimate_confidence(self, results: list[SearchResult]) -> str:
-        if not results:
-            return "low"
-
-        best_score = max((result.score or 0.0) for result in results)
-        if best_score >= 0.75:
-            return "high"
-        if best_score >= 0.45:
-            return "medium"
-        return "low"
 
     def _parse_query_results(self, raw: dict[str, Any]) -> list[SearchResult]:
         ids = _first_result_list(raw.get("ids"))
@@ -92,6 +148,25 @@ class ChromaVectorStore(VectorStore):
                     id=str(result_id),
                     content=str(documents[index]) if index < len(documents) else "",
                     score=_normalize_distance(distance),
+                    source=metadata.get("source") if isinstance(metadata.get("source"), str) else None,
+                    metadata=metadata,
+                )
+            )
+
+        return results
+
+    def _parse_get_results(self, raw: dict[str, Any]) -> list[SearchResult]:
+        ids = _first_result_list(raw.get("ids"))
+        documents = _first_result_list(raw.get("documents"))
+        metadatas = _first_result_list(raw.get("metadatas"))
+
+        results: list[SearchResult] = []
+        for index, result_id in enumerate(ids):
+            metadata = dict(metadatas[index] or {}) if index < len(metadatas) else {}
+            results.append(
+                SearchResult(
+                    id=str(result_id),
+                    content=str(documents[index]) if index < len(documents) else "",
                     source=metadata.get("source") if isinstance(metadata.get("source"), str) else None,
                     metadata=metadata,
                 )
