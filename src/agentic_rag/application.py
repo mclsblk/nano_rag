@@ -25,6 +25,7 @@ from agentic_rag.factory import (
     create_pipeline,
     create_registry_service,
     create_settings,
+    create_system_store,
     create_upload_service,
     create_vectorstore,
 )
@@ -34,6 +35,7 @@ class ApplicationService:
     def ready(self) -> dict[str, object]:
         checks = {
             "settings": _check(lambda: create_settings()),
+            "system_db": _check(_check_system_db),
             "files": _check(lambda: create_file_service().count_active()),
             "collections": _check(lambda: create_collection_service().count()),
             "registry": _check(lambda: create_registry_service().count_records()),
@@ -200,3 +202,8 @@ def _check(operation: Callable[[], object]) -> bool:
     except Exception:
         return False
     return True
+
+
+def _check_system_db() -> None:
+    with create_system_store(create_settings()).connect() as connection:
+        connection.execute("SELECT 1").fetchone()

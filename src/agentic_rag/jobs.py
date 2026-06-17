@@ -153,6 +153,23 @@ class JobService:
             )
         return self.get_job(job_id)
 
+    def mark_interrupted_jobs(self) -> int:
+        now = _now()
+        with self.store.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed',
+                    error_message = 'Job interrupted by service restart',
+                    updated_at = ?,
+                    finished_at = ?
+                WHERE job_type = 'ingest'
+                  AND status IN ('queued', 'running')
+                """,
+                (now, now),
+            )
+            return cursor.rowcount
+
 
 def _job_record(row: sqlite3.Row) -> JobRecord:
     return JobRecord(

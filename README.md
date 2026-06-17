@@ -1,11 +1,11 @@
 # Agentic RAG
 
-一个 CLI-first 的本地知识库 RAG 系统。项目面向本地文档检索与问答：先把文档写入本地向量库，再通过命令行进行检索，或基于检索结果生成带来源的回答。
+一个 API-first 的本地知识库 RAG 系统。项目面向本地文档检索与问答：通过 HTTP API 管理文件、collection 和 ingest job，再执行检索或基于检索结果生成带来源的回答。
 
 当前支持两类主要使用方式：
 
-- `search`：只返回检索结果，适合作为主 Agent 或其他工具链中的检索组件。
-- `ask`：执行检索增强生成，返回答案、来源和置信度，适合作为轻量本地知识库问答工具。
+- API：主要集成入口，适合被应用、脚本、Web UI 或上层 Agent 调用。
+- CLI：管理和 debug client，适合本地排查、冒烟测试和脚本化维护。
 
 ## 特性
 
@@ -19,6 +19,8 @@
 - PDF 页码来源：PDF 按页加载，检索结果可以带上页码信息。
 - 双输出格式：默认输出可读文本，也可通过 `--json` 输出稳定 JSON。
 - 来源追踪：检索和问答结果包含 source、page、score 等信息。
+- API 服务：提供 upload、collection、ingest job、search、ask、de-ingest 和 delete 流程。
+- 本地可用：提供 ready check、稳定错误 JSON、request id、可选 API key auth 和可选 CORS。
 
 ## 环境要求
 
@@ -82,6 +84,10 @@ SEARCH_STRATEGY=hybrid
 KEYWORD_INDEX_PATH=./storage/keyword.sqlite
 SYSTEM_DB_PATH=./storage/system.sqlite
 FILE_STORAGE_DIR=./storage/files
+UPLOAD_DIR=./storage/uploads
+MAX_UPLOAD_MB=50
+API_KEY=
+CORS_ORIGINS=
 HYBRID_VECTOR_WEIGHT=0.65
 HYBRID_CANDIDATE_MULTIPLIER=4
 CHUNK_STRATEGY=semantic
@@ -97,7 +103,9 @@ AGENTIC_CONTEXT_MAX_CHARS=4000
 AGENTIC_MULTI_QUERY_COUNT=3
 ```
 
-`CHROMA_PERSIST_DIR` 指向本地 Chroma 持久化目录。默认的 `storage/chroma/` 属于运行时数据，不适合提交到版本库。`SYSTEM_DB_PATH` 保存 file / collection / registry 系统状态；`FILE_STORAGE_DIR` 保存托管文件副本；`KEYWORD_INDEX_PATH` 仍保留旧默认 keyword index 配置，新 collection 默认使用 `storage/keyword/<collection_id>.sqlite`。
+`CHROMA_PERSIST_DIR` 指向本地 Chroma 持久化目录。默认的 `storage/chroma/` 属于运行时数据，不适合提交到版本库。`SYSTEM_DB_PATH` 保存 file / collection / registry / job 系统状态；`FILE_STORAGE_DIR` 保存托管文件副本；`UPLOAD_DIR` 保存 API 上传暂存文件；`KEYWORD_INDEX_PATH` 仍保留旧默认 keyword index 配置，新 collection 默认使用 `storage/keyword/<collection_id>.sqlite`。
+
+`API_KEY` 为空时不启用认证；配置后，除 `/health`、`/ready`、`/docs` 和 `/openapi.json` 外，API 请求需要携带 `Authorization: Bearer <API_KEY>` 或 `X-API-Key: <API_KEY>`。`CORS_ORIGINS` 为空时不启用 CORS；配置多个浏览器来源时使用逗号分隔。
 
 `SEARCH_STRATEGY` 支持：
 
@@ -120,7 +128,79 @@ keyword query 会先区分 API 名、英文/数字专名、版本号等高价值
 
 如需通过 llama.cpp、vLLM、LM Studio 或其他 OpenAI 格式服务接入模型，可把 provider 切到 `openai_compatible`，并配置对应 base URL 与模型名。`DOCUMENT_LOAD_STRATEGY` 默认为 `text`；设置为 `auto` 或 `visual` 时，PDF 低文本页或图片文件会通过 `VISUAL_MODEL_PROVIDER` 对应的视觉模型抽取文本。
 
-## 使用
+## API 使用
+
+启动 API 服务：
+
+```bash
+rag-api --host 127.0.0.1 --port 8000
+```
+
+检查进程和本地依赖：
+
+```bash
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/ready
+```
+
+上传文件：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/files/upload \
+  -F "file=@docs/project.md"
+```
+
+创建 collection：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name":"docs","description":"local docs"}'
+```
+
+创建 ingest job：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/ingest/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"file_id":"<file_id>","collection_id":"<collection_id>"}'
+```
+
+轮询 job：
+
+```bash
+curl http://127.0.0.1:8000/v1/jobs/<job_id>
+```
+
+检索和问答：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"项目支持哪些文档格式？","collection_id":"<collection_id>","top_k":5}'
+
+curl -X POST http://127.0.0.1:8000/v1/ask \
+  -H "Content-Type: application/json" \
+  -d '{"query":"search 和 ask 有什么区别？","collection_id":"<collection_id>","top_k":5}'
+```
+
+从 collection 中移除文件索引，再删除文件或 collection：
+
+```bash
+curl -X DELETE http://127.0.0.1:8000/v1/collections/<collection_id>/files/<file_id>
+curl -X DELETE http://127.0.0.1:8000/v1/files/<file_id>
+curl -X DELETE http://127.0.0.1:8000/v1/collections/<collection_id>
+```
+
+所有业务错误返回稳定 JSON：
+
+```json
+{"error":{"type":"RegistryError","message":"..."}}
+```
+
+每个响应都会带有 `X-Request-ID`。客户端也可以传入同名请求头，方便串联日志。
+
+## CLI 使用
 
 查看当前配置和向量库状态：
 
@@ -256,7 +336,7 @@ rag ask "search 和 ask 有什么区别？" --collection <collection_id> --agent
 
 - `text` loader 策略支持 `.md`、`.txt`、`.pdf`；`auto` / `visual` loader 策略额外支持 `.png`、`.jpg`、`.jpeg`、`.webp`。
 - 目录导入会递归扫描文件。
-- `rag ingest` 不覆盖已存在 source；更新前必须先 `rag de-ingest <source>`。
+- `rag ingest` 不覆盖已存在的 `file_id + collection_id`；更新前必须先 `rag de-ingest <file_id> --collection <collection_id>`。
 - 不支持的文件会被跳过并发出 warning。
 - 空文本文件、无可提取文本的 PDF 页面会被跳过。
 - PDF loader 仍按页输出 document；PDF 文本清洗在 builder 阶段完成；semantic chunker 可以合并相邻页的连续语义 chunk。

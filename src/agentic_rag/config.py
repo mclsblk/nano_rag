@@ -76,6 +76,12 @@ class AgenticSettings:
     engine: str
 
 
+@dataclass(frozen=True)
+class ServerSettings:
+    api_key: str
+    cors_origins: list[str]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -109,6 +115,8 @@ class Settings(BaseSettings):
     file_storage_dir: Path = Field(default=Path("./storage/files"))
     upload_dir: Path = Field(default=Path("./storage/uploads"))
     max_upload_mb: int = Field(default=50, ge=1)
+    api_key: str = ""
+    cors_origins: str = ""
     hybrid_vector_weight: float = Field(default=0.65, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int = Field(default=4, ge=1)
     chunk_strategy: str = "semantic"
@@ -207,6 +215,13 @@ class Settings(BaseSettings):
             context_max_chars=self.agentic_context_max_chars,
             multi_query_count=self.agentic_multi_query_count,
             engine=self.agentic_engine,
+        )
+
+    @property
+    def server(self) -> ServerSettings:
+        return ServerSettings(
+            api_key=self.api_key,
+            cors_origins=[origin.strip() for origin in self.cors_origins.split(",") if origin.strip()],
         )
 
 
