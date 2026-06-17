@@ -44,6 +44,9 @@ class AnswerResponse(CoreSchema):
 class IngestResponse(CoreSchema):
     mode: Literal["ingest"] = "ingest"
     path: str
+    file_id: str | None = None
+    collection_id: str | None = None
+    index_status: str | None = None
     loaded_documents: int = Field(ge=0)
     generated_chunks: int = Field(ge=0)
     stored_chunks: int = Field(ge=0)
@@ -53,7 +56,77 @@ class IngestResponse(CoreSchema):
 class DeIngestResponse(CoreSchema):
     mode: Literal["de_ingest"] = "de_ingest"
     source: str
+    file_id: str | None = None
+    collection_id: str | None = None
+    index_status: str | None = None
+    deleted_keyword_chunks: int | None = Field(default=None, ge=0)
     deleted_chunks: int = Field(ge=0)
+
+
+class FileRecord(CoreSchema):
+    file_id: str
+    original_name: str
+    content_hash: str
+    storage_path: str
+    file_type: str
+    size_bytes: int = Field(ge=0)
+    status: str
+    created_at: str
+
+
+class FileResponse(CoreSchema):
+    mode: Literal["file"] = "file"
+    file: FileRecord
+
+
+class FileListResponse(CoreSchema):
+    mode: Literal["file_list"] = "file_list"
+    files: list[FileRecord]
+
+
+class FileDeleteResponse(CoreSchema):
+    mode: Literal["file_delete"] = "file_delete"
+    file_id: str
+    status: str
+
+
+class CollectionRecord(CoreSchema):
+    collection_id: str
+    name: str
+    description: str
+    chroma_collection: str
+    keyword_index_path: str
+    created_at: str
+
+
+class CollectionResponse(CoreSchema):
+    mode: Literal["collection"] = "collection"
+    collection: CollectionRecord
+
+
+class CollectionListResponse(CoreSchema):
+    mode: Literal["collection_list"] = "collection_list"
+    collections: list[CollectionRecord]
+
+
+class CollectionDeleteResponse(CoreSchema):
+    mode: Literal["collection_delete"] = "collection_delete"
+    collection_id: str
+    status: str
+
+
+class RegistryRecord(CoreSchema):
+    file_id: str
+    collection_id: str
+    index_status: str
+    indexed_chunk_count: int = Field(ge=0)
+    indexed_at: str | None = None
+    last_error: str | None = None
+
+
+class RegistryListResponse(CoreSchema):
+    mode: Literal["registry_list"] = "registry_list"
+    records: list[RegistryRecord]
 
 
 class InspectResponse(CoreSchema):
@@ -81,4 +154,8 @@ class InspectResponse(CoreSchema):
     keyword_index_path: str = ""
     keyword_source_count: int = Field(default=0, ge=0)
     keyword_chunk_count: int = Field(default=0, ge=0)
+    file_count: int = Field(default=0, ge=0)
+    collection_count: int = Field(default=0, ge=0)
+    registry_record_count: int = Field(default=0, ge=0)
+    indexed_chunk_count: int = Field(default=0, ge=0)
     agentic_engine: str = "service"

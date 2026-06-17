@@ -7,17 +7,24 @@ from pydantic import BaseModel
 from agentic_rag.agent.service import AgenticAskResult
 from agentic_rag.core import (
     AnswerResponse,
+    CollectionDeleteResponse,
+    CollectionListResponse,
+    CollectionResponse,
     DeIngestResponse,
+    FileDeleteResponse,
+    FileListResponse,
+    FileResponse,
     IngestResponse,
     InspectResponse,
     OutputFormatError,
+    RegistryListResponse,
     SearchResponse,
     SearchResult,
 )
 
 
 _PUBLIC_METADATA_KEYS = (
-    "source", "file_name", "file_type", "page", "page_count",
+    "source", "file_id", "collection_id", "file_name", "file_type", "page", "page_count",
     "page_end", "page_index", "page_number", "page_start",
 )
 
@@ -48,6 +55,20 @@ class OutputFormatter:
             return self.format_ingest(response)
         if isinstance(response, DeIngestResponse):
             return self.format_de_ingest(response)
+        if isinstance(response, FileResponse):
+            return self.format_file(response)
+        if isinstance(response, FileListResponse):
+            return self.format_file_list(response)
+        if isinstance(response, FileDeleteResponse):
+            return f"File: {response.file_id}\nStatus: {response.status}"
+        if isinstance(response, CollectionResponse):
+            return self.format_collection(response)
+        if isinstance(response, CollectionListResponse):
+            return self.format_collection_list(response)
+        if isinstance(response, CollectionDeleteResponse):
+            return f"Collection: {response.collection_id}\nStatus: {response.status}"
+        if isinstance(response, RegistryListResponse):
+            return self.format_registry_list(response)
         if isinstance(response, InspectResponse):
             return self.format_inspect(response)
 
@@ -126,6 +147,12 @@ class OutputFormatter:
             f"Stored chunks: {response.stored_chunks}",
             f"Skipped: {len(response.skipped)}",
         ]
+        if response.file_id is not None:
+            lines.append(f"File: {response.file_id}")
+        if response.collection_id is not None:
+            lines.append(f"Collection: {response.collection_id}")
+        if response.index_status is not None:
+            lines.append(f"Index status: {response.index_status}")
 
         for index, message in enumerate(response.skipped, start=1):
             lines.append(f"{index}. {message}")
@@ -133,12 +160,62 @@ class OutputFormatter:
         return "\n".join(lines)
 
     def format_de_ingest(self, response: DeIngestResponse) -> str:
+        lines = [
+            f"Source: {response.source}",
+            f"Deleted chunks: {response.deleted_chunks}",
+        ]
+        if response.file_id is not None:
+            lines.append(f"File: {response.file_id}")
+        if response.collection_id is not None:
+            lines.append(f"Collection: {response.collection_id}")
+        if response.deleted_keyword_chunks is not None:
+            lines.append(f"Deleted keyword chunks: {response.deleted_keyword_chunks}")
+        if response.index_status is not None:
+            lines.append(f"Index status: {response.index_status}")
+        return "\n".join(lines)
+
+    def format_file(self, response: FileResponse) -> str:
+        file = response.file
         return "\n".join(
             [
-                f"Source: {response.source}",
-                f"Deleted chunks: {response.deleted_chunks}",
+                f"File: {file.file_id}",
+                f"Original name: {file.original_name}",
+                f"Storage path: {file.storage_path}",
+                f"Size bytes: {file.size_bytes}",
+                f"Status: {file.status}",
             ]
         )
+
+    def format_file_list(self, response: FileListResponse) -> str:
+        lines = [f"Files: {len(response.files)}"]
+        for file in response.files:
+            lines.append(f"{file.file_id}\t{file.original_name}\t{file.status}\t{file.size_bytes}")
+        return "\n".join(lines)
+
+    def format_collection(self, response: CollectionResponse) -> str:
+        collection = response.collection
+        return "\n".join(
+            [
+                f"Collection: {collection.collection_id}",
+                f"Name: {collection.name}",
+                f"Chroma collection: {collection.chroma_collection}",
+                f"Keyword index: {collection.keyword_index_path}",
+            ]
+        )
+
+    def format_collection_list(self, response: CollectionListResponse) -> str:
+        lines = [f"Collections: {len(response.collections)}"]
+        for collection in response.collections:
+            lines.append(f"{collection.collection_id}\t{collection.name}\t{collection.keyword_index_path}")
+        return "\n".join(lines)
+
+    def format_registry_list(self, response: RegistryListResponse) -> str:
+        lines = [f"Registry records: {len(response.records)}"]
+        for record in response.records:
+            lines.append(
+                f"{record.collection_id}\t{record.file_id}\t{record.index_status}\t{record.indexed_chunk_count}"
+            )
+        return "\n".join(lines)
 
     def format_inspect(self, response: InspectResponse) -> str:
         lines = [
@@ -165,6 +242,10 @@ class OutputFormatter:
             f"keyword_index_path={response.keyword_index_path}",
             f"keyword_source_count={response.keyword_source_count}",
             f"keyword_chunk_count={response.keyword_chunk_count}",
+            f"file_count={response.file_count}",
+            f"collection_count={response.collection_count}",
+            f"registry_record_count={response.registry_record_count}",
+            f"indexed_chunk_count={response.indexed_chunk_count}",
             f"agentic_engine={response.agentic_engine}",
         ]
         return "\n".join(lines)

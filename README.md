@@ -13,7 +13,8 @@
 - 多 provider：支持 Ollama 和 OpenAI-compatible API，可分别配置 chat / embedding provider。
 - 持久化向量库：使用 Chroma 存储文档分块和向量。
 - Hybrid Search：默认同时使用 Chroma vector search 和 SQLite FTS5 keyword search。
-- 文档导入：默认支持 `.md`、`.txt`、`.pdf` 文件，也支持递归导入目录；`auto` / `visual` loader 策略下可处理 `.png`、`.jpg`、`.jpeg`、`.webp` 图片。
+- 托管文件与 collection：文件先进入本地 file storage，再按需 ingest 到一个或多个 collection。
+- 文档加载：默认支持 `.md`、`.txt`、`.pdf` 文件；`auto` / `visual` loader 策略下可处理 `.png`、`.jpg`、`.jpeg`、`.webp` 图片。
 - Agentic Ask：可选启用 query rewrite、multi-query retrieval、context judge 和 fallback policy。
 - PDF 页码来源：PDF 按页加载，检索结果可以带上页码信息。
 - 双输出格式：默认输出可读文本，也可通过 `--json` 输出稳定 JSON。
@@ -79,6 +80,8 @@ CHROMA_PERSIST_DIR=./storage/chroma
 CHROMA_COLLECTION=agentic_rag
 SEARCH_STRATEGY=hybrid
 KEYWORD_INDEX_PATH=./storage/keyword.sqlite
+SYSTEM_DB_PATH=./storage/system.sqlite
+FILE_STORAGE_DIR=./storage/files
 HYBRID_VECTOR_WEIGHT=0.65
 HYBRID_CANDIDATE_MULTIPLIER=4
 CHUNK_STRATEGY=semantic
@@ -94,7 +97,7 @@ AGENTIC_CONTEXT_MAX_CHARS=4000
 AGENTIC_MULTI_QUERY_COUNT=3
 ```
 
-`CHROMA_PERSIST_DIR` 指向本地 Chroma 持久化目录。默认的 `storage/chroma/` 属于运行时数据，不适合提交到版本库。`KEYWORD_INDEX_PATH` 指向本地 SQLite keyword index，同样属于运行时数据。
+`CHROMA_PERSIST_DIR` 指向本地 Chroma 持久化目录。默认的 `storage/chroma/` 属于运行时数据，不适合提交到版本库。`SYSTEM_DB_PATH` 保存 file / collection / registry 系统状态；`FILE_STORAGE_DIR` 保存托管文件副本；`KEYWORD_INDEX_PATH` 仍保留旧默认 keyword index 配置，新 collection 默认使用 `storage/keyword/<collection_id>.sqlite`。
 
 `SEARCH_STRATEGY` 支持：
 
@@ -102,9 +105,9 @@ AGENTIC_MULTI_QUERY_COUNT=3
 - `vector`：只使用 Chroma vector search，便于回退和 debug。
 - `keyword`：只使用 SQLite FTS5 keyword search；search / ask 检索阶段不需要 embedding 查询。
 
-SQLite keyword index 会保存 source 生命周期记录、chunk 原文和基于正文生成的内部 keyword text；不保存 source 级完整原文。keyword text 只用于检索，不会作为 `search` / `ask` 的结果内容返回。metadata 不参与 keyword text 生成，只通过结果里的 source、page 等字段用于溯源。中文 keyword text 只生成 bigram / trigram，不生成单字 token，因此单字中文 query 不保证命中。
+SQLite keyword index 会保存 collection 内的 chunk 原文和基于正文生成的内部 keyword text；不保存文件生命周期状态。file / collection / registry 生命周期状态保存在 system SQLite 中。`source` 只作为展示和溯源字段，不再作为生命周期主键。keyword text 只用于检索，不会作为 `search` / `ask` 的结果内容返回。metadata 不参与 keyword text 生成，只通过结果里的 source、page 等字段用于溯源。中文 keyword text 只生成 bigram / trigram，不生成单字 token，因此单字中文 query 不保证命中。
 
-keyword query 会先区分 API 名、英文/数字专名、版本号等高价值 token，以及“功能”“作用”“参数”等泛化意图 token。keyword score 表示 query 满足程度，会综合 required token 覆盖、optional token 覆盖、精确专名命中、BM25 信号和正文结构信号；它不是简单的 FTS 排名倒数。升级 keyword tokenization 或 score 逻辑后，已入库旧数据需要先 `rag de-ingest <source>` 再 `rag ingest <source>`，才能完整使用新的 keyword text 和词频信号。
+keyword query 会先区分 API 名、英文/数字专名、版本号等高价值 token，以及“功能”“作用”“参数”等泛化意图 token。keyword score 表示 query 满足程度，会综合 required token 覆盖、optional token 覆盖、精确专名命中、BM25 信号和正文结构信号；它不是简单的 FTS 排名倒数。升级 keyword tokenization 或 score 逻辑后，已入库旧数据需要先对对应 `file_id + collection_id` 执行 de-ingest，再重新 ingest。
 
 `HYBRID_VECTOR_WEIGHT` 控制 hybrid 排序中 vector score 的权重；keyword score 权重自动为 `1 - HYBRID_VECTOR_WEIGHT`。例如默认 `0.65` 表示 vector 占 65%，keyword 占 35%。
 
@@ -131,94 +134,103 @@ rag inspect
 rag inspect --json
 ```
 
-导入单个文件：
+创建 collection：
 
 ```bash
-rag ingest docs/project.md
+rag collection create docs --json
 ```
 
-导入整个目录：
+导入托管文件并得到稳定 `file_id`：
 
 ```bash
-rag ingest docs
+rag file import docs/project.md --json
 ```
 
-导入并输出 JSON：
+把托管文件 ingest 到指定 collection：
 
 ```bash
-rag ingest docs --json
+rag ingest <file_id> --collection <collection_id>
 ```
 
-`rag ingest` 不会覆盖已存在的 source。需要重新导入同一个 source 时，先删除旧 chunks：
+同一个 `file_id` 可以 ingest 到多个 collection。重复 ingest 同一个 active 的 `file_id + collection_id` 会直接失败，不会静默覆盖。
+
+查看托管文件、collection 和 registry 状态：
 
 ```bash
-rag de-ingest docs/project.md
-rag ingest docs/project.md
+rag file list --json
+rag collection list --json
+rag registry list --json
 ```
 
-非 JSON 模式下，`rag ingest` 会显示导入阶段进度，包括加载文档、切分 chunks、写入 keyword index 和写入 vector index。
-
-删除并输出 JSON：
+从某个 collection 中 de-ingest 文件：
 
 ```bash
-rag de-ingest docs/project.md --json
+rag de-ingest <file_id> --collection <collection_id> --json
+```
+
+删除 file 或 collection 前，必须先 de-ingest 所有关联的 active registry record：
+
+```bash
+rag file delete <file_id> --json
+rag collection delete <collection_id> --json
 ```
 
 检索知识库：
 
 ```bash
-rag search "项目支持哪些文档格式？" --top-k 5
+rag search "项目支持哪些文档格式？" --collection <collection_id> --top-k 5
 ```
 
 检索并输出 JSON：
 
 ```bash
-rag search "项目支持哪些文档格式？" --json
+rag search "项目支持哪些文档格式？" --collection <collection_id> --json
 ```
 
 输出完整检索调试 metadata：
 
 ```bash
-rag search "项目支持哪些文档格式？" --debug --json
+rag search "项目支持哪些文档格式？" --collection <collection_id> --debug --json
 ```
 
 基于知识库问答：
 
 ```bash
-rag ask "search 和 ask 有什么区别？" --top-k 5
+rag ask "search 和 ask 有什么区别？" --collection <collection_id> --top-k 5
 ```
 
 问答并输出 JSON：
 
 ```bash
-rag ask "search 和 ask 有什么区别？" --json
+rag ask "search 和 ask 有什么区别？" --collection <collection_id> --json
 ```
 
 启用 Agentic Ask：
 
 ```bash
-rag ask "search 和 ask 有什么区别？" --agentic
+rag ask "search 和 ask 有什么区别？" --collection <collection_id> --agentic
 ```
 
 输出 Agentic Debug 信息：
 
 ```bash
-rag ask "search 和 ask 有什么区别？" --agentic --debug --json
+rag ask "search 和 ask 有什么区别？" --collection <collection_id> --agentic --debug --json
 ```
 
 ## 数据流程
 
-1. `rag ingest` 读取文件或目录。
-2. `DocumentLoader` 跳过不支持的文件类型和空内容。
-3. 当前 chunk strategy 将文档切成 chunks。
+1. `rag file import` 计算文件内容 hash，把原始文件复制到托管 file storage，并登记稳定 `file_id`。
+2. `rag collection create` 创建 collection 元数据，默认使用独立的 Chroma collection 和 keyword SQLite 文件。
+3. `rag ingest <file_id> --collection <collection_id>` 由 registry 检查该 file 是否可进入目标 collection。
+4. `DocumentLoader` 加载托管文件，跳过不支持的文件类型和空内容。
+5. 当前 chunk strategy 将文档切成 chunks。
    - `semantic`：`DocumentBuilder` 先做硬断点切 section、段落清洗和小 block 合并；`SemanticChunker` 再使用 embedding 相似度判断语义边界，PDF 可在相邻页之间合并连续 chunk。
    - `character`：按字数窗口切分，并使用固定重叠。
-4. SQLite keyword index 保存 source 生命周期记录、chunk 原文和内部 keyword text。
-5. 当前 embedding provider 为最终 chunks 生成 embedding。
-6. `ChromaVectorStore` 将 chunks、向量和元数据写入 Chroma。
-7. `rag search` 根据 `SEARCH_STRATEGY` 执行 vector / keyword / hybrid 检索。
-8. `rag ask` 将检索结果作为上下文交给聊天模型生成回答。
-9. `rag ask --agentic` 会先改写 query、生成多个检索 query、合并去重检索结果，再判断 context 是否足够。
+6. `rag/indexer.py` 为 chunks 注入 `file_id`、`collection_id`，写入目标 collection 的 SQLite keyword index 和 Chroma。
+7. registry 将对应 `file_id + collection_id` 标记为 `indexed`，并记录 chunk 数量。
+8. `rag search --collection` 根据 `SEARCH_STRATEGY` 在指定 collection 内执行 vector / keyword / hybrid 检索。
+9. `rag ask --collection` 将检索结果作为上下文交给聊天模型生成回答。
+10. `rag ask --agentic --collection` 会先改写 query、生成多个检索 query、合并去重检索结果，再判断 context 是否足够。
 
 ## 输出说明
 
@@ -236,7 +248,7 @@ rag ask "search 和 ask 有什么区别？" --agentic --debug --json
 - 生成答案
 - 来源列表
 
-非 JSON 模式下，长耗时命令会显示运行状态：`ingest` 使用阶段进度，`search`、`ask`、`inspect`、`de-ingest` 使用简短 spinner。使用 `--json` 时，进度和 spinner 会关闭，输出保持紧凑 JSON，适合脚本或上层 Agent 调用。默认 JSON 会过滤每条结果的内部 metadata，只保留 source、file、page 相关溯源字段。
+非 JSON 模式下，长耗时命令会显示简短 spinner。使用 `--json` 时，spinner 会关闭，输出保持紧凑 JSON，适合脚本或上层 Agent 调用。默认 JSON 会过滤每条结果的内部 metadata，只保留 source、file、collection、page 相关溯源字段。
 
 使用 `--debug --json` 时，会输出完整 result metadata，包括 retrieval mode、vector score、keyword score、raw BM25、matched tokens 和 coverage 等调试字段。`rag ask --agentic --debug --json` 还会在默认 `AnswerResponse` 字段外额外输出 `debug` 对象，包含 rewritten query、retrieval queries、context 判断、fallback reason 和选中的 source ids。
 

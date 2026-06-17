@@ -9,11 +9,7 @@ class VectorStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def source_exists(self, source: str) -> bool:
-        raise NotImplementedError
-
-    @abstractmethod
-    def delete_by_source(self, source: str) -> int:
+    def delete_by_file(self, file_id: str, collection_id: str) -> int:
         raise NotImplementedError
 
     @abstractmethod

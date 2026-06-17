@@ -26,8 +26,8 @@ class IndexConsistencyError(AgenticRAGError):
     """Raised when hybrid retrieval indexes are inconsistent."""
 
 
-class SourceConflictError(AgenticRAGError):
-    """Raised when ingest would overwrite an existing source."""
+class RegistryError(AgenticRAGError):
+    """Raised when file, collection, or registry state is invalid."""
 
 
 class RAGPipelineError(AgenticRAGError):

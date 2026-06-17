@@ -42,6 +42,12 @@ class KeywordSettings:
 
 
 @dataclass(frozen=True)
+class SystemSettings:
+    db_path: Path
+    file_storage_dir: Path
+
+
+@dataclass(frozen=True)
 class SearchSettings:
     strategy: str
     hybrid_vector_weight: float
@@ -97,6 +103,8 @@ class Settings(BaseSettings):
     chroma_collection: str = "agentic_rag"
     search_strategy: str = "hybrid"
     keyword_index_path: Path = Field(default=Path("./storage/keyword.sqlite"))
+    system_db_path: Path = Field(default=Path("./storage/system.sqlite"))
+    file_storage_dir: Path = Field(default=Path("./storage/files"))
     hybrid_vector_weight: float = Field(default=0.65, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int = Field(default=4, ge=1)
     chunk_strategy: str = "semantic"
@@ -157,6 +165,13 @@ class Settings(BaseSettings):
     @property
     def keyword(self) -> KeywordSettings:
         return KeywordSettings(index_path=self.keyword_index_path)
+
+    @property
+    def system(self) -> SystemSettings:
+        return SystemSettings(
+            db_path=self.system_db_path,
+            file_storage_dir=self.file_storage_dir,
+        )
 
     @property
     def search(self) -> SearchSettings:

@@ -33,11 +33,12 @@ class SQLiteKeywordStore:
                     metadata = _source_metadata(source_documents)
                     connection.execute(
                         """
-                        INSERT INTO sources (source, metadata_json, created_at)
-                        VALUES (?, ?, ?)
+                        INSERT INTO sources (source, file_id, metadata_json, created_at)
+                        VALUES (?, ?, ?, ?)
                         """,
                         (
                             source,
+                            _source_file_id(source_documents),
                             _json_dumps(metadata),
                             datetime.now(timezone.utc).isoformat(),
                         ),
@@ -59,13 +60,14 @@ class SQLiteKeywordStore:
                     connection.execute(
                         """
                         INSERT INTO chunks (
-                            id, source, content, metadata_json, chunk_index, page_start, page_end
+                            id, source, file_id, content, metadata_json, chunk_index, page_start, page_end
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             chunk.id,
                             source,
+                            _chunk_file_id(chunk),
                             chunk.content,
                             _json_dumps(metadata),
                             _optional_int(metadata.get("chunk_index")),
@@ -85,25 +87,18 @@ class SQLiteKeywordStore:
         except Exception as exc:
             raise KeywordStoreError("Failed to add chunks to SQLite keyword store.") from exc
 
-    def source_exists(self, source: str) -> bool:
+    def delete_by_file_id(self, file_id: str) -> int:
         try:
             with self._connect() as connection:
-                row = connection.execute("SELECT 1 FROM sources WHERE source = ? LIMIT 1", (source,)).fetchone()
+                rows = connection.execute("SELECT id FROM chunks WHERE file_id = ?", (file_id,)).fetchall()
+                chunk_ids = [str(row["id"]) for row in rows]
+                deleted_chunks = len(chunk_ids)
+                for chunk_id in chunk_ids:
+                    connection.execute("DELETE FROM chunk_fts WHERE chunk_id = ?", (chunk_id,))
+                connection.execute("DELETE FROM chunks WHERE file_id = ?", (file_id,))
+                connection.execute("DELETE FROM sources WHERE file_id = ?", (file_id,))
         except Exception as exc:
-            raise KeywordStoreError(f"Failed to check source in SQLite keyword store: {source}") from exc
-
-        return row is not None
-
-    def delete_by_source(self, source: str) -> int:
-        try:
-            with self._connect() as connection:
-                row = connection.execute("SELECT COUNT(*) AS count FROM chunks WHERE source = ?", (source,)).fetchone()
-                deleted_chunks = int(row["count"]) if row is not None else 0
-                connection.execute("DELETE FROM chunk_fts WHERE source = ?", (source,))
-                connection.execute("DELETE FROM chunks WHERE source = ?", (source,))
-                connection.execute("DELETE FROM sources WHERE source = ?", (source,))
-        except Exception as exc:
-            raise KeywordStoreError(f"Failed to delete source from SQLite keyword store: {source}") from exc
+            raise KeywordStoreError(f"Failed to delete file from SQLite keyword store: {file_id}") from exc
 
         return deleted_chunks
 
@@ -173,6 +168,7 @@ class SQLiteKeywordStore:
                 """
                 CREATE TABLE IF NOT EXISTS sources (
                     source TEXT PRIMARY KEY,
+                    file_id TEXT,
                     metadata_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )
@@ -183,6 +179,7 @@ class SQLiteKeywordStore:
                 CREATE TABLE IF NOT EXISTS chunks (
                     id TEXT PRIMARY KEY,
                     source TEXT NOT NULL,
+                    file_id TEXT,
                     content TEXT NOT NULL,
                     metadata_json TEXT NOT NULL,
                     chunk_index INTEGER,
@@ -198,6 +195,8 @@ class SQLiteKeywordStore:
                 );
                 """
             )
+            _ensure_column(connection, "sources", "file_id", "TEXT")
+            _ensure_column(connection, "chunks", "file_id", "TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path))
@@ -391,9 +390,21 @@ def _source_metadata(documents: list[Document]) -> dict[str, Any]:
     return metadata
 
 
+def _source_file_id(documents: list[Document]) -> str | None:
+    if not documents:
+        return None
+    value = documents[0].metadata.get("file_id")
+    return value if isinstance(value, str) and value else None
+
+
 def _document_source(document: Document) -> str:
     source = document.metadata.get("source")
     return source if isinstance(source, str) and source else document.id
+
+
+def _chunk_file_id(chunk: Chunk) -> str | None:
+    value = chunk.metadata.get("file_id")
+    return value if isinstance(value, str) and value else None
 
 
 def _chunk_source(chunk: Chunk) -> str:
@@ -420,6 +431,13 @@ def _json_dumps(value: dict[str, Any]) -> str:
 def _json_loads(value: str) -> dict[str, Any]:
     loaded = json.loads(value)
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _ensure_column(connection: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(str(row["name"]) == column for row in rows):
+        return
+    connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
 
 
 def _fts_or_query(tokens: list[str]) -> str:

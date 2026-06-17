@@ -10,10 +10,7 @@ class KeywordStore(Protocol):
     def add_chunks(self, chunks: list[Chunk]) -> None:
         raise NotImplementedError
 
-    def source_exists(self, source: str) -> bool:
-        raise NotImplementedError
-
-    def delete_by_source(self, source: str) -> int:
+    def delete_by_file_id(self, file_id: str) -> int:
         raise NotImplementedError
 
     def keyword_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
