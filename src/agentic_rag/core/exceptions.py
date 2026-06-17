@@ -30,6 +30,14 @@ class RegistryError(AgenticRAGError):
     """Raised when file, collection, or registry state is invalid."""
 
 
+class UploadError(AgenticRAGError):
+    """Raised when file upload staging fails."""
+
+
+class JobError(AgenticRAGError):
+    """Raised when job state is invalid."""
+
+
 class RAGPipelineError(AgenticRAGError):
     """Raised when the RAG pipeline fails."""
 

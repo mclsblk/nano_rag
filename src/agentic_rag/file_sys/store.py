@@ -48,6 +48,28 @@ class SystemStore:
                     FOREIGN KEY (file_id) REFERENCES files(file_id),
                     FOREIGN KEY (collection_id) REFERENCES collections(collection_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id TEXT PRIMARY KEY,
+                    job_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    file_id TEXT NOT NULL,
+                    collection_id TEXT NOT NULL,
+                    loader TEXT,
+                    input_path TEXT,
+                    upload_file_name TEXT,
+                    loaded_documents INTEGER NOT NULL DEFAULT 0,
+                    generated_chunks INTEGER NOT NULL DEFAULT 0,
+                    stored_chunks INTEGER NOT NULL DEFAULT 0,
+                    skipped TEXT NOT NULL DEFAULT '[]',
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    FOREIGN KEY (file_id) REFERENCES files(file_id),
+                    FOREIGN KEY (collection_id) REFERENCES collections(collection_id)
+                );
                 """
             )
 

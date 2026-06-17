@@ -14,11 +14,12 @@ class FileService:
         self.storage_dir = Path(storage_dir)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-    def import_file(self, path: str | Path) -> FileResponse:
+    def import_file(self, path: str | Path, original_name: str | None = None) -> FileResponse:
         source_path = Path(path)
         if not source_path.is_file():
             raise RegistryError(f"File path does not exist or is not a file: {source_path}")
 
+        resolved_name = Path(original_name).name if original_name else source_path.name
         content_hash = _sha256_file(source_path)
         file_id = f"sha256_{content_hash}"
         existing = self.get_file_or_none(file_id)
@@ -27,12 +28,12 @@ class FileService:
 
         target_dir = self.storage_dir / content_hash[:2] / file_id
         target_dir.mkdir(parents=True, exist_ok=True)
-        target_path = target_dir / source_path.name
+        target_path = target_dir / resolved_name
         shutil.copy2(source_path, target_path)
 
         record = FileRecord(
             file_id=file_id,
-            original_name=source_path.name,
+            original_name=resolved_name,
             content_hash=content_hash,
             storage_path=str(target_path),
             file_type=source_path.suffix.lower(),

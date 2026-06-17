@@ -11,6 +11,11 @@ class HealthResponse(ServerSchema):
     status: Literal["ok"] = "ok"
 
 
+class ReadyResponse(ServerSchema):
+    status: Literal["ok", "error"]
+    checks: dict[str, bool]
+
+
 class SearchRequest(ServerSchema):
     query: str
     collection_id: str
@@ -23,6 +28,25 @@ class AskRequest(ServerSchema):
     top_k: int = Field(default=5, ge=1)
     agentic: bool = False
     engine: str | None = None
+
+
+class FilePathImportRequest(ServerSchema):
+    path: str
+
+
+class CollectionCreateRequest(ServerSchema):
+    name: str
+    description: str = ""
+
+
+class IngestRequest(ServerSchema):
+    loader: str | None = None
+
+
+class IngestJobCreateRequest(ServerSchema):
+    file_id: str
+    collection_id: str
+    loader: str | None = None
 
 
 class ErrorBody(ServerSchema):

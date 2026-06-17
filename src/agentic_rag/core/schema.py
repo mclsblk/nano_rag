@@ -129,6 +129,36 @@ class RegistryListResponse(CoreSchema):
     records: list[RegistryRecord]
 
 
+class JobRecord(CoreSchema):
+    job_id: str
+    job_type: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    file_id: str
+    collection_id: str
+    loader: str | None = None
+    input_path: str | None = None
+    upload_file_name: str | None = None
+    loaded_documents: int = Field(default=0, ge=0)
+    generated_chunks: int = Field(default=0, ge=0)
+    stored_chunks: int = Field(default=0, ge=0)
+    skipped: list[str] = Field(default_factory=list)
+    error_message: str | None = None
+    created_at: str
+    updated_at: str
+    started_at: str | None = None
+    finished_at: str | None = None
+
+
+class JobResponse(CoreSchema):
+    mode: Literal["job"] = "job"
+    job: JobRecord
+
+
+class JobListResponse(CoreSchema):
+    mode: Literal["job_list"] = "job_list"
+    jobs: list[JobRecord]
+
+
 class InspectResponse(CoreSchema):
     mode: Literal["inspect"] = "inspect"
     model_provider: str

@@ -3,7 +3,7 @@ from agentic_rag.agent.service import AgenticService
 from agentic_rag.config import Settings, load_settings
 from agentic_rag.core import CollectionRecord
 from agentic_rag.document import create_document_chunker, create_document_loader
-from agentic_rag.file_sys import CollectionService, FileService, RegistryService, SystemStore
+from agentic_rag.file_sys import CollectionService, FileService, JobService, RegistryService, SystemStore, UploadService
 from agentic_rag.keyword import SQLiteKeywordStore
 from agentic_rag.models import EmbeddingModel, create_chat_model, create_embedding_model, create_vision_model
 from agentic_rag.output import OutputFormatter
@@ -25,9 +25,18 @@ def create_file_service(settings: Settings | None = None) -> FileService:
     return FileService(create_system_store(resolved_settings), resolved_settings.system.file_storage_dir)
 
 
+def create_upload_service(settings: Settings | None = None) -> UploadService:
+    resolved_settings = settings or create_settings()
+    return UploadService(resolved_settings.system.upload_dir, resolved_settings.system.max_upload_mb)
+
+
 def create_collection_service(settings: Settings | None = None) -> CollectionService:
     resolved_settings = settings or create_settings()
     return CollectionService(create_system_store(resolved_settings), _keyword_collection_dir(resolved_settings))
+
+
+def create_job_service(settings: Settings | None = None) -> JobService:
+    return JobService(create_system_store(settings))
 
 
 def create_vectorstore(

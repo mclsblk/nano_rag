@@ -45,6 +45,8 @@ class KeywordSettings:
 class SystemSettings:
     db_path: Path
     file_storage_dir: Path
+    upload_dir: Path
+    max_upload_mb: int
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,8 @@ class Settings(BaseSettings):
     keyword_index_path: Path = Field(default=Path("./storage/keyword.sqlite"))
     system_db_path: Path = Field(default=Path("./storage/system.sqlite"))
     file_storage_dir: Path = Field(default=Path("./storage/files"))
+    upload_dir: Path = Field(default=Path("./storage/uploads"))
+    max_upload_mb: int = Field(default=50, ge=1)
     hybrid_vector_weight: float = Field(default=0.65, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int = Field(default=4, ge=1)
     chunk_strategy: str = "semantic"
@@ -171,6 +175,8 @@ class Settings(BaseSettings):
         return SystemSettings(
             db_path=self.system_db_path,
             file_storage_dir=self.file_storage_dir,
+            upload_dir=self.upload_dir,
+            max_upload_mb=self.max_upload_mb,
         )
 
     @property
