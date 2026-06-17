@@ -13,7 +13,7 @@
 - 多 provider：支持 Ollama 和 OpenAI-compatible API，可分别配置 chat / embedding provider。
 - 持久化向量库：使用 Chroma 存储文档分块和向量。
 - Hybrid Search：默认同时使用 Chroma vector search 和 SQLite FTS5 keyword search。
-- 文档导入：支持 `.md`、`.txt`、`.pdf` 文件，也支持递归导入目录。
+- 文档导入：默认支持 `.md`、`.txt`、`.pdf` 文件，也支持递归导入目录；`auto` / `visual` loader 策略下可处理 `.png`、`.jpg`、`.jpeg`、`.webp` 图片。
 - Agentic Ask：可选启用 query rewrite、multi-query retrieval、context judge 和 fallback policy。
 - PDF 页码来源：PDF 按页加载，检索结果可以带上页码信息。
 - 双输出格式：默认输出可读文本，也可通过 `--json` 输出稳定 JSON。
@@ -70,7 +70,11 @@ OPENAI_COMPATIBLE_BASE_URL=
 OPENAI_COMPATIBLE_API_KEY=
 OPENAI_COMPATIBLE_CHAT_MODEL=
 OPENAI_COMPATIBLE_EMBEDDING_MODEL=
+OPENAI_COMPATIBLE_VISUAL_MODEL=
 OPENAI_COMPATIBLE_TIMEOUT_SECONDS=30
+DOCUMENT_LOAD_STRATEGY=text
+VISUAL_MODEL_PROVIDER=openai_compatible
+VISUAL_MIN_TEXT_CHARS=40
 CHROMA_PERSIST_DIR=./storage/chroma
 CHROMA_COLLECTION=agentic_rag
 SEARCH_STRATEGY=hybrid
@@ -98,7 +102,9 @@ AGENTIC_MULTI_QUERY_COUNT=3
 - `vector`：只使用 Chroma vector search，便于回退和 debug。
 - `keyword`：只使用 SQLite FTS5 keyword search；search / ask 检索阶段不需要 embedding 查询。
 
-SQLite keyword index 会保存 source 生命周期记录、chunk 原文和内部 keyword text；不保存 source 级完整原文。keyword text 只用于检索，不会作为 `search` / `ask` 的结果内容返回。中文 keyword text 只生成 bigram / trigram，不生成单字 token，因此单字中文 query 不保证命中。
+SQLite keyword index 会保存 source 生命周期记录、chunk 原文和基于正文生成的内部 keyword text；不保存 source 级完整原文。keyword text 只用于检索，不会作为 `search` / `ask` 的结果内容返回。metadata 不参与 keyword text 生成，只通过结果里的 source、page 等字段用于溯源。中文 keyword text 只生成 bigram / trigram，不生成单字 token，因此单字中文 query 不保证命中。
+
+keyword query 会先区分 API 名、英文/数字专名、版本号等高价值 token，以及“功能”“作用”“参数”等泛化意图 token。keyword score 表示 query 满足程度，会综合 required token 覆盖、optional token 覆盖、精确专名命中、BM25 信号和正文结构信号；它不是简单的 FTS 排名倒数。升级 keyword tokenization 或 score 逻辑后，已入库旧数据需要先 `rag de-ingest <source>` 再 `rag ingest <source>`，才能完整使用新的 keyword text 和词频信号。
 
 `HYBRID_VECTOR_WEIGHT` 控制 hybrid 排序中 vector score 的权重；keyword score 权重自动为 `1 - HYBRID_VECTOR_WEIGHT`。例如默认 `0.65` 表示 vector 占 65%，keyword 占 35%。
 
@@ -109,7 +115,7 @@ SQLite keyword index 会保存 source 生命周期记录、chunk 原文和内部
 
 `CHUNK_SIZE_CHARS`、`CHUNK_OVERLAP_CHARS` 和 `CHUNK_MIN_CHARS` 按“字数”计算：中文、英文、数字计入，空白和标点不计入。`CHUNK_SIZE_CHARS` 在 `semantic` 下是最大字数预算，不表示每 N 字固定切一刀；`CHUNK_MIN_CHARS` 会影响 builder 的小 block 合并和 chunker 的小 chunk 合并；`CHUNK_OVERLAP_CHARS` 只对 `character` 策略生效。semantic 阈值是启发式默认值，可按语料继续微调。
 
-如需通过 llama.cpp、vLLM、LM Studio 或其他 OpenAI 格式服务接入模型，可把 provider 切到 `openai_compatible`，并配置对应 base URL 与模型名。
+如需通过 llama.cpp、vLLM、LM Studio 或其他 OpenAI 格式服务接入模型，可把 provider 切到 `openai_compatible`，并配置对应 base URL 与模型名。`DOCUMENT_LOAD_STRATEGY` 默认为 `text`；设置为 `auto` 或 `visual` 时，PDF 低文本页或图片文件会通过 `VISUAL_MODEL_PROVIDER` 对应的视觉模型抽取文本。
 
 ## 使用
 
@@ -150,6 +156,8 @@ rag de-ingest docs/project.md
 rag ingest docs/project.md
 ```
 
+非 JSON 模式下，`rag ingest` 会显示导入阶段进度，包括加载文档、切分 chunks、写入 keyword index 和写入 vector index。
+
 删除并输出 JSON：
 
 ```bash
@@ -166,6 +174,12 @@ rag search "项目支持哪些文档格式？" --top-k 5
 
 ```bash
 rag search "项目支持哪些文档格式？" --json
+```
+
+输出完整检索调试 metadata：
+
+```bash
+rag search "项目支持哪些文档格式？" --debug --json
 ```
 
 基于知识库问答：
@@ -222,13 +236,13 @@ rag ask "search 和 ask 有什么区别？" --agentic --debug --json
 - 生成答案
 - 来源列表
 
-使用 `--json` 时，输出基于 Pydantic schema 的紧凑 JSON，适合脚本或上层 Agent 调用。
+非 JSON 模式下，长耗时命令会显示运行状态：`ingest` 使用阶段进度，`search`、`ask`、`inspect`、`de-ingest` 使用简短 spinner。使用 `--json` 时，进度和 spinner 会关闭，输出保持紧凑 JSON，适合脚本或上层 Agent 调用。默认 JSON 会过滤每条结果的内部 metadata，只保留 source、file、page 相关溯源字段。
 
-`rag ask --agentic --debug --json` 会在默认 `AnswerResponse` 字段外额外输出 `debug` 对象，包含 rewritten query、retrieval queries、context 判断、fallback reason 和选中的 source ids。
+使用 `--debug --json` 时，会输出完整 result metadata，包括 retrieval mode、vector score、keyword score、raw BM25、matched tokens 和 coverage 等调试字段。`rag ask --agentic --debug --json` 还会在默认 `AnswerResponse` 字段外额外输出 `debug` 对象，包含 rewritten query、retrieval queries、context 判断、fallback reason 和选中的 source ids。
 
 ## 当前行为说明
 
-- 仅支持 `.md`、`.txt`、`.pdf`。
+- `text` loader 策略支持 `.md`、`.txt`、`.pdf`；`auto` / `visual` loader 策略额外支持 `.png`、`.jpg`、`.jpeg`、`.webp`。
 - 目录导入会递归扫描文件。
 - `rag ingest` 不覆盖已存在 source；更新前必须先 `rag de-ingest <source>`。
 - 不支持的文件会被跳过并发出 warning。
@@ -238,6 +252,7 @@ rag ask "search 和 ask 有什么区别？" --agentic --debug --json
 - `rag search` 始终保持单 query 检索，不启用 rewrite 或 multi-query。
 - Query rewrite 和 multi-query retrieval 只在 `rag ask --agentic` 下启用。
 - 默认 hybrid 检索会要求 Chroma 和 SQLite keyword index 拥有一致的 source/chunk；旧的 Chroma-only 数据需要先 `rag de-ingest <source>` 再重新 ingest。
+- keyword text 和 document tokenization 不会自动迁移；升级 keyword 检索逻辑后，旧 source 也需要先 `rag de-ingest <source>` 再重新 ingest，才能完整受益。
 - vector 检索分数由 Chroma distance 归一化到 `[0.0, 1.0]`；hybrid 分数来自 vector score 与 keyword score 的简单加权，不是 LLM rerank。
 
 ## 作为 Python 模块使用

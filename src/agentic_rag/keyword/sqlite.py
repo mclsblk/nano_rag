@@ -6,7 +6,12 @@ import sqlite3
 from typing import Any
 
 from agentic_rag.core import Chunk, Document, KeywordStoreError, SearchResult
-from agentic_rag.keyword.tokenizer import build_keyword_text, tokenize
+from agentic_rag.keyword.query_vocab import QUERY_TOKEN_ALIASES
+from agentic_rag.keyword.tokenizer import KeywordQuery, analyze_query, build_keyword_text, tokenize
+
+
+_CANDIDATE_MULTIPLIER = 8
+_MIN_CANDIDATES = 50
 
 
 class SQLiteKeywordStore:
@@ -106,55 +111,19 @@ class SQLiteKeywordStore:
         if top_k <= 0:
             raise KeywordStoreError("top_k must be greater than 0.")
 
-        tokens = tokenize(query)
-        if not tokens:
+        keyword_query = analyze_query(query)
+        query_tokens = [*keyword_query.required_tokens, *keyword_query.optional_tokens]
+        if not query_tokens:
             return []
 
-        match_query = _fts_or_query(tokens)
         try:
             with self._connect() as connection:
-                rows = connection.execute(
-                    """
-                    SELECT
-                        chunks.id,
-                        chunks.source,
-                        chunks.content,
-                        chunks.metadata_json,
-                        bm25(chunk_fts) AS raw_bm25
-                    FROM chunk_fts
-                    JOIN chunks ON chunks.id = chunk_fts.chunk_id
-                    WHERE chunk_fts MATCH ?
-                    ORDER BY raw_bm25 ASC
-                    LIMIT ?
-                    """,
-                    (match_query, top_k),
-                ).fetchall()
+                rows = _keyword_candidate_rows(connection, keyword_query, limit=_candidate_limit(top_k))
         except Exception as exc:
             raise KeywordStoreError("Failed to query SQLite keyword store.") from exc
 
-        results: list[SearchResult] = []
-        for index, row in enumerate(rows, start=1):
-            metadata = _json_loads(row["metadata_json"])
-            raw_bm25 = float(row["raw_bm25"])
-            keyword_score = 1.0 / index
-            metadata.update(
-                {
-                    "keyword_score": keyword_score,
-                    "raw_bm25": raw_bm25,
-                    "retrieval_mode": "keyword",
-                }
-            )
-            results.append(
-                SearchResult(
-                    id=str(row["id"]),
-                    content=str(row["content"]),
-                    score=keyword_score,
-                    source=str(row["source"]),
-                    metadata=metadata,
-                )
-            )
-
-        return results
+        scored_rows = _score_keyword_rows(rows, keyword_query)
+        return [_search_result(row, score_data) for row, score_data in scored_rows[:top_k]]
 
     def get_chunk(self, chunk_id: str) -> Chunk | None:
         try:
@@ -236,6 +205,179 @@ class SQLiteKeywordStore:
         return connection
 
 
+def _keyword_candidate_rows(
+    connection: sqlite3.Connection,
+    keyword_query: KeywordQuery,
+    *,
+    limit: int,
+) -> list[sqlite3.Row]:
+    if keyword_query.required_tokens:
+        rows = _fetch_keyword_rows(connection, _fts_and_query(keyword_query.required_tokens), limit)
+        if rows:
+            return rows
+
+    relaxed_tokens = [*keyword_query.required_tokens, *keyword_query.optional_tokens]
+    return _fetch_keyword_rows(connection, _fts_or_query(relaxed_tokens), limit)
+
+
+def _fetch_keyword_rows(connection: sqlite3.Connection, match_query: str, limit: int) -> list[sqlite3.Row]:
+    return connection.execute(
+        """
+        SELECT
+            chunks.id,
+            chunks.source,
+            chunks.content,
+            chunks.metadata_json,
+            bm25(chunk_fts) AS raw_bm25
+        FROM chunk_fts
+        JOIN chunks ON chunks.id = chunk_fts.chunk_id
+        WHERE chunk_fts MATCH ?
+        ORDER BY raw_bm25 ASC
+        LIMIT ?
+        """,
+        (match_query, limit),
+    ).fetchall()
+
+
+def _score_keyword_rows(
+    rows: list[sqlite3.Row],
+    keyword_query: KeywordQuery,
+) -> list[tuple[sqlite3.Row, dict[str, Any]]]:
+    raw_bm25_values = [float(row["raw_bm25"]) for row in rows]
+    scored: list[tuple[sqlite3.Row, dict[str, Any]]] = []
+
+    for index, row in enumerate(rows, start=1):
+        content_tokens = _text_tokens(str(row["content"]))
+        required_matches = _matched_tokens(keyword_query.required_tokens, content_tokens)
+        optional_matches = _matched_tokens(keyword_query.optional_tokens, content_tokens)
+
+        required_coverage = _coverage(required_matches, keyword_query.required_tokens)
+        optional_coverage = _coverage(optional_matches, keyword_query.optional_tokens)
+        exact_token_bonus = _exact_token_bonus(required_matches)
+        structure_bonus = _structure_bonus(str(row["content"]), keyword_query)
+        bm25_signal = _normalized_bm25(float(row["raw_bm25"]), raw_bm25_values)
+
+        score = (
+            0.55 * required_coverage
+            + 0.20 * optional_coverage
+            + 0.15 * exact_token_bonus
+            + 0.05 * bm25_signal
+            + 0.05 * structure_bonus
+        )
+        if keyword_query.required_tokens and required_coverage == 0.0:
+            score = min(score, 0.20)
+
+        scored.append(
+            (
+                row,
+                {
+                    "keyword_score": _clamp_score(score),
+                    "keyword_rank": index,
+                    "keyword_matched_tokens": _dedupe_tokens([*required_matches, *optional_matches]),
+                    "keyword_content_matched_tokens": _dedupe_tokens([*required_matches, *optional_matches]),
+                    "keyword_required_coverage": required_coverage,
+                    "keyword_optional_coverage": optional_coverage,
+                    "keyword_exact_token_bonus": exact_token_bonus,
+                    "keyword_bm25_signal": bm25_signal,
+                    "keyword_structure_bonus": structure_bonus,
+                },
+            )
+        )
+
+    scored.sort(key=lambda item: (item[1]["keyword_score"], -float(item[0]["raw_bm25"])), reverse=True)
+    return scored
+
+
+def _search_result(row: sqlite3.Row, score_data: dict[str, Any]) -> SearchResult:
+    metadata = _json_loads(row["metadata_json"])
+    raw_bm25 = float(row["raw_bm25"])
+    keyword_score = float(score_data["keyword_score"])
+    metadata.update(
+        {
+            "keyword_score": keyword_score,
+            "raw_bm25": raw_bm25,
+            "retrieval_mode": "keyword",
+            **score_data,
+        }
+    )
+    return SearchResult(
+        id=str(row["id"]),
+        content=str(row["content"]),
+        score=keyword_score,
+        source=str(row["source"]),
+        metadata=metadata,
+    )
+
+
+def _candidate_limit(top_k: int) -> int:
+    return max(top_k * _CANDIDATE_MULTIPLIER, _MIN_CANDIDATES)
+
+
+def _text_tokens(text: str) -> set[str]:
+    return set(tokenize(text))
+
+
+def _matched_tokens(query_tokens: tuple[str, ...], keyword_tokens: set[str]) -> list[str]:
+    return [token for token in query_tokens if _token_matches(token, keyword_tokens)]
+
+
+def _token_matches(token: str, keyword_tokens: set[str]) -> bool:
+    return token in keyword_tokens or any(alias in keyword_tokens for alias in QUERY_TOKEN_ALIASES.get(token, ()))
+
+
+def _coverage(matches: list[str], query_tokens: tuple[str, ...]) -> float:
+    if not query_tokens:
+        return 0.0
+    return len(matches) / len(query_tokens)
+
+
+def _dedupe_tokens(tokens: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        deduped.append(token)
+    return deduped
+
+
+def _exact_token_bonus(required_matches: list[str]) -> float:
+    if not required_matches:
+        return 0.0
+    return 1.0 if any(token.isascii() and any(character.isalpha() for character in token) for token in required_matches) else 0.5
+
+
+def _structure_bonus(content: str, keyword_query: KeywordQuery) -> float:
+    folded = content.casefold()
+    first_required = min(
+        (position for token in keyword_query.required_tokens if (position := folded.find(token)) >= 0),
+        default=-1,
+    )
+    if first_required < 0:
+        return 0.0
+    if any(token in keyword_query.optional_tokens for token in ("功能", "作用")):
+        if "功能说明" in folded[:80] and first_required <= 160:
+            return 1.0
+    if "函数原型" in folded[:160] and first_required <= 160:
+        return 0.6
+    return 0.0
+
+
+def _normalized_bm25(raw_bm25: float, raw_bm25_values: list[float]) -> float:
+    if not raw_bm25_values:
+        return 0.0
+    best = min(raw_bm25_values)
+    worst = max(raw_bm25_values)
+    if best == worst:
+        return 1.0
+    return (worst - raw_bm25) / (worst - best)
+
+
+def _clamp_score(score: float) -> float:
+    return max(0.0, min(1.0, score))
+
+
 def _group_documents_by_source(documents: list[Document]) -> dict[str, list[Document]]:
     grouped: dict[str, list[Document]] = defaultdict(list)
     for document in documents:
@@ -282,6 +424,10 @@ def _json_loads(value: str) -> dict[str, Any]:
 
 def _fts_or_query(tokens: list[str]) -> str:
     return " OR ".join(_quote_fts_token(token) for token in tokens)
+
+
+def _fts_and_query(tokens: tuple[str, ...]) -> str:
+    return " AND ".join(_quote_fts_token(token) for token in tokens)
 
 
 def _quote_fts_token(token: str) -> str:

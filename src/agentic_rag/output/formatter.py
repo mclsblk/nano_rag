@@ -16,18 +16,29 @@ from agentic_rag.core import (
 )
 
 
+_PUBLIC_METADATA_KEYS = (
+    "source", "file_name", "file_type", "page", "page_count",
+    "page_end", "page_index", "page_number", "page_start",
+)
+
+
 class OutputFormatter:
     def __init__(self, content_preview_chars: int | None = None) -> None:
         if content_preview_chars is not None and content_preview_chars <= 0:
             raise OutputFormatError("content_preview_chars must be greater than 0.")
         self.content_preview_chars = content_preview_chars
 
-    def format_response(self, response: BaseModel | AgenticAskResult, as_json: bool = False) -> str:
+    def format_response(
+        self,
+        response: BaseModel | AgenticAskResult,
+        as_json: bool = False,
+        debug: bool = False,
+    ) -> str:
         if isinstance(response, AgenticAskResult):
-            return self.format_agentic_ask_result(response, as_json=as_json)
+            return self.format_agentic_ask_result(response, as_json=as_json, debug=debug)
 
         if as_json:
-            return self.format_json(response)
+            return self.format_json(response, debug=debug)
 
         if isinstance(response, SearchResponse):
             return self.format_search(response)
@@ -42,12 +53,22 @@ class OutputFormatter:
 
         raise OutputFormatError(f"Unsupported response type: {type(response).__name__}")
 
-    def format_json(self, response: BaseModel) -> str:
-        return response.model_dump_json()
+    def format_json(self, response: BaseModel, debug: bool = False) -> str:
+        data = response.model_dump(mode="json")
+        if not debug:
+            data = _public_json_data(data)
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
-    def format_agentic_ask_result(self, response: AgenticAskResult, as_json: bool = False) -> str:
+    def format_agentic_ask_result(
+        self,
+        response: AgenticAskResult,
+        as_json: bool = False,
+        debug: bool = False,
+    ) -> str:
         if as_json:
             data = response.response.model_dump(mode="json")
+            if not debug:
+                data = _public_json_data(data)
             data["debug"] = asdict(response.debug)
             return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
@@ -184,3 +205,16 @@ def _preview_content(content: str, limit: int | None) -> str:
     if limit is None or len(content) <= limit:
         return content
     return f"{content[:limit].rstrip()}..."
+
+
+def _public_json_data(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_public_json_data(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    data = {key: _public_json_data(item) for key, item in value.items()}
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        data["metadata"] = {key: metadata[key] for key in _PUBLIC_METADATA_KEYS if key in metadata}
+    return data

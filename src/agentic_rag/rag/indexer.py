@@ -4,6 +4,7 @@ from typing import Protocol
 from agentic_rag.core import AgenticRAGError, Chunk, DeIngestResponse, Document, IngestResponse, SourceConflictError
 from agentic_rag.document import DocumentLoader
 from agentic_rag.keyword import KeywordStore
+from agentic_rag.rag.progress import IngestProgressCallback, report_ingest_progress
 from agentic_rag.vectorstore import VectorStore
 
 
@@ -28,36 +29,92 @@ class Indexer:
     def ingest(self, path: str | Path) -> int:
         return self.ingest_with_report(path).stored_chunks
 
-    def ingest_with_report(self, path: str | Path) -> IngestResponse:
+    def ingest_with_report(self, path: str | Path, progress: IngestProgressCallback | None = None) -> IngestResponse:
+        report_ingest_progress(progress, "load", "Loading documents")
         load_report = self.loader.load_with_report(path)
         documents = load_report.documents
+        report_ingest_progress(
+            progress,
+            "load",
+            "Loaded documents",
+            completed=len(documents),
+            total=len(documents),
+        )
+
+        report_ingest_progress(progress, "conflicts", "Checking source conflicts")
         sources = _document_sources(documents)
         conflicts = self._source_conflicts(sources)
         if conflicts:
             raise SourceConflictError(_source_conflict_message(conflicts))
+        report_ingest_progress(
+            progress,
+            "conflicts",
+            "Checked source conflicts",
+            completed=len(sources),
+            total=len(sources),
+        )
 
+        report_ingest_progress(progress, "split", "Splitting documents")
         chunks = self.splitter.split_documents(documents)
+        report_ingest_progress(progress, "split", "Generated chunks", completed=len(chunks), total=len(chunks))
         stored_chunks = 0
         should_cleanup = False
 
         try:
             if self.keyword_store is not None:
+                report_ingest_progress(progress, "keyword_documents", "Writing keyword source records")
                 self.keyword_store.add_documents(documents)
                 should_cleanup = bool(sources)
+                report_ingest_progress(
+                    progress,
+                    "keyword_documents",
+                    "Wrote keyword source records",
+                    completed=len(documents),
+                    total=len(documents),
+                )
+                report_ingest_progress(
+                    progress,
+                    "keyword_chunks",
+                    "Writing keyword chunks",
+                    completed=0,
+                    total=len(chunks),
+                )
                 self.keyword_store.add_chunks(chunks)
+                report_ingest_progress(
+                    progress,
+                    "keyword_chunks",
+                    "Wrote keyword chunks",
+                    completed=len(chunks),
+                    total=len(chunks),
+                )
 
             if chunks:
                 stored_chunks = len(chunks)
+                report_ingest_progress(
+                    progress,
+                    "vector_chunks",
+                    "Writing vector chunks",
+                    completed=0,
+                    total=len(chunks),
+                )
                 for i in range(0, len(chunks), 50):
                     i_end = min(i + 50, len(chunks))
                     self.vectorstore.add_documents(chunks[i:i_end])
                     should_cleanup = True
+                    report_ingest_progress(
+                        progress,
+                        "vector_chunks",
+                        "Writing vector chunks",
+                        completed=i_end,
+                        total=len(chunks),
+                    )
         except Exception as exc:
             cleanup_errors = self._cleanup_sources(sources) if should_cleanup else []
             if cleanup_errors:
                 raise AgenticRAGError(_cleanup_error_message(exc, sources, cleanup_errors)) from exc
             raise
 
+        report_ingest_progress(progress, "complete", "Ingest complete", completed=stored_chunks, total=stored_chunks)
         return IngestResponse(
             path=str(path),
             loaded_documents=len(documents),

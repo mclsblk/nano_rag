@@ -8,6 +8,20 @@ from agentic_rag.keyword import KeywordStore
 from agentic_rag.vectorstore import VectorStore
 
 
+_KEYWORD_METADATA_KEYS = (
+    "keyword_score",
+    "raw_bm25",
+    "keyword_rank",
+    "keyword_matched_tokens",
+    "keyword_content_matched_tokens",
+    "keyword_required_coverage",
+    "keyword_optional_coverage",
+    "keyword_exact_token_bonus",
+    "keyword_bm25_signal",
+    "keyword_structure_bonus",
+)
+
+
 class Retriever:
     def __init__(self, vectorstore: VectorStore) -> None:
         self.vectorstore = vectorstore
@@ -58,9 +72,8 @@ class HybridRetriever:
 
         for rank, result in enumerate(keyword_results, start=1):
             entry = candidates.setdefault(result.id, {"result": result})
-            entry["keyword_rank"] = rank
             entry["keyword_score"] = result.score
-            entry["raw_bm25"] = result.metadata.get("raw_bm25")
+            entry["keyword_metadata"] = _keyword_metadata(result, rank)
             if "vector_rank" not in entry:
                 entry["result"] = result
 
@@ -142,10 +155,21 @@ def _hybrid_result(candidate: dict[str, Any], vector_weight: float) -> SearchRes
         metadata["vector_score"] = vector_score
     if keyword_score is not None:
         metadata["keyword_score"] = keyword_score
-    if candidate.get("raw_bm25") is not None:
-        metadata["raw_bm25"] = candidate["raw_bm25"]
+    metadata.update(candidate.get("keyword_metadata", {}))
 
     return result.model_copy(update={"metadata": metadata, "score": hybrid_score})
+
+
+def _keyword_metadata(result: SearchResult, rank: int) -> dict[str, Any]:
+    metadata = {
+        key: value
+        for key in _KEYWORD_METADATA_KEYS
+        if (value := result.metadata.get(key)) is not None
+    }
+    metadata["keyword_rank"] = rank
+    if result.score is not None:
+        metadata["keyword_score"] = result.score
+    return metadata
 
 
 def _estimate_confidence(results: list[SearchResult]) -> str:
