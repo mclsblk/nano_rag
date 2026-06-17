@@ -4,17 +4,13 @@ from contextlib import contextmanager
 from rich.console import Console
 import typer
 
-from agentic_rag.core import AgenticRAGError, InspectResponse
+from agentic_rag.application import ApplicationService
+from agentic_rag.core import AgenticRAGError
 from agentic_rag.factory import (
-    create_agentic_service,
     create_collection_service,
     create_file_service,
     create_formatter,
-    create_keyword_store,
-    create_pipeline,
     create_registry_service,
-    create_settings,
-    create_vectorstore,
 )
 
 
@@ -48,7 +44,7 @@ def list_files(
 ) -> None:
     """List managed files."""
     def command() -> None:
-        response = create_file_service().list_files()
+        response = ApplicationService().list_files()
         typer.echo(create_formatter().format_response(response, as_json=json_output))
 
     _run(command)
@@ -88,7 +84,7 @@ def list_collections(
 ) -> None:
     """List collections."""
     def command() -> None:
-        response = create_collection_service().list_collections()
+        response = ApplicationService().list_collections()
         typer.echo(create_formatter().format_response(response, as_json=json_output))
 
     _run(command)
@@ -162,7 +158,7 @@ def search(
     """Search the local knowledge base."""
     def command() -> None:
         with _status("Searching...", enabled=not json_output):
-            response = create_pipeline(collection_id=collection_id).search(query, top_k=top_k)
+            response = ApplicationService().search(query, collection_id=collection_id, top_k=top_k)
         typer.echo(create_formatter().format_response(response, as_json=json_output, debug=debug))
 
     _run(command)
@@ -185,11 +181,21 @@ def ask(
     """Ask a question using retrieval-augmented generation."""
     def command() -> None:
         with _status("Retrieving and generating answer...", enabled=not json_output):
-            if agentic:
-                service = create_agentic_service(engine=engine, collection_id=collection_id)
-                response = service.ask_with_debug(query, top_k=top_k) if debug else service.ask(query, top_k=top_k)
+            if agentic and debug:
+                from agentic_rag.factory import create_agentic_service
+
+                response = create_agentic_service(engine=engine, collection_id=collection_id).ask_with_debug(
+                    query,
+                    top_k=top_k,
+                )
             else:
-                response = create_pipeline(require_gen=True, collection_id=collection_id).ask(query, top_k=top_k)
+                response = ApplicationService().ask(
+                    query,
+                    collection_id=collection_id,
+                    top_k=top_k,
+                    agentic=agentic,
+                    engine=engine,
+                )
         typer.echo(create_formatter().format_response(response, as_json=json_output, debug=debug))
 
     _run(command)
@@ -202,48 +208,7 @@ def inspect(
     """Show current configuration and vector store status."""
     def command() -> None:
         with _status("Inspecting knowledge base...", enabled=not json_output):
-            settings = create_settings()
-            vectorstore = create_vectorstore(settings)
-            keyword_store = create_keyword_store(settings)
-            file_service = create_file_service(settings)
-            collection_service = create_collection_service(settings)
-            registry = create_registry_service(settings)
-            models = settings.models
-            loader = settings.loader
-            vectorstore_settings = settings.vectorstore
-            keyword = settings.keyword
-            search = settings.search
-            agentic = settings.agentic
-            response = InspectResponse(
-                model_provider=models.provider,
-                chat_model_provider=models.chat_provider,
-                embedding_model_provider=models.embedding_provider,
-                ollama_base_url=models.ollama_base_url,
-                ollama_chat_model=models.ollama_chat_model,
-                ollama_embedding_model=models.ollama_embedding_model,
-                ollama_timeout_seconds=models.ollama_timeout_seconds,
-                ollama_think=models.ollama_think,
-                openai_compatible_base_url=models.openai_compatible_base_url,
-                openai_compatible_chat_model=models.openai_compatible_chat_model,
-                openai_compatible_embedding_model=models.openai_compatible_embedding_model,
-                openai_compatible_visual_model=models.openai_compatible_visual_model,
-                openai_compatible_timeout_seconds=models.openai_compatible_timeout_seconds,
-                document_load_strategy=loader.load_strategy,
-                visual_model_provider=models.visual_provider,
-                visual_min_text_chars=loader.visual_min_text_chars,
-                chroma_persist_dir=str(vectorstore_settings.chroma_persist_dir),
-                chroma_collection=vectorstore_settings.chroma_collection,
-                chroma_count=vectorstore.count_chunks(),
-                search_strategy=search.strategy,
-                keyword_index_path=str(keyword.index_path),
-                keyword_source_count=keyword_store.count_sources(),
-                keyword_chunk_count=keyword_store.count_chunks(),
-                file_count=file_service.count_active(),
-                collection_count=collection_service.count(),
-                registry_record_count=registry.count_records(),
-                indexed_chunk_count=registry.count_indexed_chunks(),
-                agentic_engine=agentic.engine,
-            )
+            response = ApplicationService().inspect_state()
         typer.echo(create_formatter().format_response(response, as_json=json_output))
 
     _run(command)

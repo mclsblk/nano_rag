@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentic-rag"
-version = "0.2.0"
+version = "0.2.6"
 description = "CLI-first local Agentic RAG system"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,6 +19,8 @@ dependencies = [
     "requests>=2.31.0",
     "pypdf>=4.0.0",
     "scikit-learn>=1.4.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +36,7 @@ dev = [
 
 [project.scripts]
 rag = "agentic_rag.cli:app"
+rag-api = "agentic_rag.server.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
