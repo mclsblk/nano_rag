@@ -3,7 +3,8 @@ from agentic_rag.agent.service import AgenticService
 from agentic_rag.config import Settings, load_settings
 from agentic_rag.core import CollectionRecord
 from agentic_rag.document import create_document_chunker, create_document_loader
-from agentic_rag.file_sys import CollectionService, FileService, JobService, RegistryService, SystemStore, UploadService
+from agentic_rag.file_sys import CollectionService, FileService, RegistryService, SystemStore, UploadService
+from agentic_rag.jobs import JobService
 from agentic_rag.keyword import SQLiteKeywordStore
 from agentic_rag.models import EmbeddingModel, create_chat_model, create_embedding_model, create_vision_model
 from agentic_rag.output import OutputFormatter
