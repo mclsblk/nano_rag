@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse
 from agentic_rag.application import ApplicationService
 from agentic_rag.core import (
     AgenticRAGError,
-    AnswerResponse,
     CollectionDeleteResponse,
     CollectionListResponse,
     CollectionResponse,
@@ -24,7 +23,9 @@ from agentic_rag.core import (
     InspectResponse,
     JobListResponse,
     JobResponse,
-    SearchResponse,
+    PublicAnswerResponse,
+    PublicSearchResponse,
+    SearchDebugResponse,
 )
 from agentic_rag.factory import create_job_service, create_settings
 from agentic_rag.server.schemas import (
@@ -35,6 +36,7 @@ from agentic_rag.server.schemas import (
     IngestJobCreateRequest,
     IngestRequest,
     ReadyResponse,
+    SearchDebugRequest,
     SearchRequest,
     error_response,
 )
@@ -51,7 +53,7 @@ async def _lifespan(_api: FastAPI):
 
 
 def create_app() -> FastAPI:
-    api = FastAPI(title="Agentic RAG API", version="0.3.0", lifespan=_lifespan)
+    api = FastAPI(title="Agentic RAG API", version="0.3.2", lifespan=_lifespan)
     settings = create_settings()
     if settings.server.cors_origins:
         api.add_middleware(
@@ -124,17 +126,26 @@ def create_app() -> FastAPI:
     def inspect():
         return ApplicationService().inspect_state()
 
-    @api.post("/v1/search", response_model=SearchResponse)
+    @api.post("/v1/search", response_model=PublicSearchResponse)
     def search(request: SearchRequest):
-        return ApplicationService().search(
+        return ApplicationService().search_public(
             request.query,
             collection_id=request.collection_id,
             top_k=request.top_k,
         )
 
-    @api.post("/v1/ask", response_model=AnswerResponse)
+    @api.post("/v1/search/debug", response_model=SearchDebugResponse, response_model_exclude_none=True)
+    def search_debug(request: SearchDebugRequest):
+        return ApplicationService().search_debug(
+            request.query,
+            collection_id=request.collection_id,
+            top_k=request.top_k,
+            include_content=request.include_content,
+        )
+
+    @api.post("/v1/ask", response_model=PublicAnswerResponse)
     def ask(request: AskRequest):
-        return ApplicationService().ask(
+        return ApplicationService().ask_public(
             request.query,
             collection_id=request.collection_id,
             top_k=request.top_k,

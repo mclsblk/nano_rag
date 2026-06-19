@@ -17,15 +17,11 @@ from agentic_rag.core import (
     IngestResponse,
     InspectResponse,
     OutputFormatError,
+    PUBLIC_METADATA_KEYS,
     RegistryListResponse,
     SearchResponse,
+    SearchDebugResponse,
     SearchResult,
-)
-
-
-_PUBLIC_METADATA_KEYS = (
-    "source", "file_id", "collection_id", "file_name", "file_type", "page", "page_count",
-    "page_end", "page_index", "page_number", "page_start",
 )
 
 
@@ -49,6 +45,8 @@ class OutputFormatter:
 
         if isinstance(response, SearchResponse):
             return self.format_search(response)
+        if isinstance(response, SearchDebugResponse):
+            return self.format_search_debug(response)
         if isinstance(response, AnswerResponse):
             return self.format_answer(response)
         if isinstance(response, IngestResponse):
@@ -76,7 +74,7 @@ class OutputFormatter:
 
     def format_json(self, response: BaseModel, debug: bool = False) -> str:
         data = response.model_dump(mode="json")
-        if not debug:
+        if not debug and not isinstance(response, SearchDebugResponse):
             data = _public_json_data(data)
         return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
@@ -135,6 +133,50 @@ class OutputFormatter:
         for index, source in enumerate(response.sources, start=1):
             lines.append(
                 f"{index}. source={_source_label(source)} page={_page_label(source.metadata)} score={_score_label(source.score)}"
+            )
+
+        return "\n".join(lines)
+
+    def format_search_debug(self, response: SearchDebugResponse) -> str:
+        diagnostics = response.diagnostics
+        lines = [
+            f"Query: {response.query}",
+            f"Collection: {response.collection_id}",
+            f"Strategy: {response.strategy}",
+            f"Top K: {response.top_k}",
+            f"Results: {len(response.results)}",
+        ]
+        if "candidate_k" in diagnostics:
+            lines.append(f"Candidate K: {diagnostics['candidate_k']}")
+        if "vector_weight" in diagnostics:
+            lines.append(f"Vector weight: {diagnostics['vector_weight']}")
+        if "keyword_weight" in diagnostics:
+            lines.append(f"Keyword weight: {diagnostics['keyword_weight']}")
+
+        for index, result in enumerate(response.results, start=1):
+            metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            retrieval = result.get("retrieval") if isinstance(result.get("retrieval"), dict) else {}
+            lines.extend(
+                [
+                    "",
+                    f"{index}. source={result.get('source') or metadata.get('source') or 'n/a'} "
+                    f"page={_page_label(metadata)} score={_score_label(result.get('score'))}",
+                    _retrieval_label(retrieval),
+                ]
+            )
+            content = result.get("content")
+            if isinstance(content, str):
+                lines.append(_preview_content(content, self.content_preview_chars))
+
+        vector_candidates = diagnostics.get("vector_candidates")
+        keyword_candidates = diagnostics.get("keyword_candidates")
+        if isinstance(vector_candidates, list) or isinstance(keyword_candidates, list):
+            lines.extend(
+                [
+                    "",
+                    f"Vector candidates: {len(vector_candidates) if isinstance(vector_candidates, list) else 0}",
+                    f"Keyword candidates: {len(keyword_candidates) if isinstance(keyword_candidates, list) else 0}",
+                ]
             )
 
         return "\n".join(lines)
@@ -295,7 +337,19 @@ def _public_json_data(value: Any) -> Any:
         return value
 
     data = {key: _public_json_data(item) for key, item in value.items()}
+    data.pop("retrieval", None)
     metadata = data.get("metadata")
     if isinstance(metadata, dict):
-        data["metadata"] = {key: metadata[key] for key in _PUBLIC_METADATA_KEYS if key in metadata}
+        data["metadata"] = {key: metadata[key] for key in PUBLIC_METADATA_KEYS if key in metadata}
     return data
+
+
+def _retrieval_label(retrieval: dict[str, Any]) -> str:
+    labels = []
+    for key in ("retrieval_mode", "hybrid_score", "vector_score", "keyword_score", "raw_bm25"):
+        if key in retrieval:
+            labels.append(f"{key}={retrieval[key]}")
+    matched = retrieval.get("keyword_matched_tokens")
+    if matched:
+        labels.append(f"matched_tokens={matched}")
+    return "retrieval: " + ", ".join(labels) if labels else "retrieval: n/a"

@@ -13,8 +13,14 @@ from agentic_rag.core import (
     InspectResponse,
     JobListResponse,
     JobResponse,
+    PUBLIC_METADATA_KEYS,
+    PublicAnswerResponse,
+    PublicSearchResponse,
+    PublicSearchResult,
     RegistryError,
+    SearchDebugResponse,
     SearchResponse,
+    SearchResult,
 )
 from agentic_rag.factory import (
     create_agentic_service,
@@ -96,6 +102,24 @@ class ApplicationService:
     def search(self, query: str, *, collection_id: str, top_k: int = 5) -> SearchResponse:
         return create_pipeline(collection_id=collection_id).search(query, top_k=top_k)
 
+    def search_public(self, query: str, *, collection_id: str, top_k: int = 5) -> PublicSearchResponse:
+        return _public_search_response(self.search(query, collection_id=collection_id, top_k=top_k))
+
+    def search_debug(
+        self,
+        query: str,
+        *,
+        collection_id: str,
+        top_k: int = 5,
+        include_content: bool = False,
+    ) -> SearchDebugResponse:
+        return create_pipeline(collection_id=collection_id).retriever.search_debug(
+            query,
+            collection_id=collection_id,
+            top_k=top_k,
+            include_content=include_content,
+        )
+
     def ask(
         self,
         query: str,
@@ -108,6 +132,29 @@ class ApplicationService:
         if agentic:
             return create_agentic_service(engine=engine, collection_id=collection_id).ask(query, top_k=top_k)
         return create_pipeline(require_gen=True, collection_id=collection_id).ask(query, top_k=top_k)
+
+    def ask_public(
+        self,
+        query: str,
+        *,
+        collection_id: str,
+        top_k: int = 5,
+        agentic: bool = False,
+        engine: str | None = None,
+    ) -> PublicAnswerResponse:
+        response = self.ask(
+            query,
+            collection_id=collection_id,
+            top_k=top_k,
+            agentic=agentic,
+            engine=engine,
+        )
+        return PublicAnswerResponse(
+            query=response.query,
+            answer=response.answer,
+            sources=[_public_search_result(result) for result in response.sources],
+            confidence=response.confidence,
+        )
 
     def list_files(self) -> FileListResponse:
         return create_file_service().list_files()
@@ -207,3 +254,20 @@ def _check(operation: Callable[[], object]) -> bool:
 def _check_system_db() -> None:
     with create_system_store(create_settings()).connect() as connection:
         connection.execute("SELECT 1").fetchone()
+
+
+def _public_search_response(response: SearchResponse) -> PublicSearchResponse:
+    return PublicSearchResponse(
+        query=response.query,
+        results=[_public_search_result(result) for result in response.results],
+    )
+
+
+def _public_search_result(result: SearchResult) -> PublicSearchResult:
+    return PublicSearchResult(
+        id=result.id,
+        content=result.content,
+        score=result.score,
+        source=result.source,
+        metadata={key: result.metadata[key] for key in PUBLIC_METADATA_KEYS if key in result.metadata},
+    )

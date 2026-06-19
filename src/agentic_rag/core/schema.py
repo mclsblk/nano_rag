@@ -25,6 +25,30 @@ class SearchResult(CoreSchema):
     score: float | None = Field(default=None, ge=0.0, le=1.0)
     source: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    retrieval: dict[str, Any] = Field(default_factory=dict)
+
+
+PUBLIC_METADATA_KEYS = (
+    "source",
+    "file_id",
+    "collection_id",
+    "file_name",
+    "file_type",
+    "page",
+    "page_index",
+    "page_number",
+    "page_start",
+    "page_end",
+    "page_count",
+)
+
+
+class PublicSearchResult(CoreSchema):
+    id: str
+    content: str
+    score: float | None = Field(default=None, ge=0.0, le=1.0)
+    source: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SearchResponse(CoreSchema):
@@ -33,12 +57,36 @@ class SearchResponse(CoreSchema):
     results: list[SearchResult]
 
 
+class PublicSearchResponse(CoreSchema):
+    mode: Literal["search"] = "search"
+    query: str
+    results: list[PublicSearchResult]
+
+
 class AnswerResponse(CoreSchema):
     mode: Literal["ask"] = "ask"
     query: str
     answer: str
     sources: list[SearchResult]
     confidence: Literal["high", "medium", "low"] | None = None
+
+
+class PublicAnswerResponse(CoreSchema):
+    mode: Literal["ask"] = "ask"
+    query: str
+    answer: str
+    sources: list[PublicSearchResult]
+    confidence: Literal["high", "medium", "low"] | None = None
+
+
+class SearchDebugResponse(CoreSchema):
+    mode: Literal["search_debug"] = "search_debug"
+    query: str
+    collection_id: str
+    top_k: int = Field(ge=1)
+    strategy: str
+    results: list[dict[str, Any]]
+    diagnostics: dict[str, Any] = Field(default_factory=dict)
 
 
 class IngestResponse(CoreSchema):

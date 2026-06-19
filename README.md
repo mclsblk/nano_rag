@@ -20,6 +20,7 @@
 - 双输出格式：默认输出可读文本，也可通过 `--json` 输出稳定 JSON。
 - 来源追踪：检索和问答结果包含 source、page、score 等信息。
 - API 服务：提供 upload、collection、ingest job、search、ask、de-ingest 和 delete 流程。
+- Public / Debug API 分层：普通 search / ask 只返回调用方需要的结果和溯源字段，debug endpoint 返回检索分支和排序证据。
 - 本地可用：提供 ready check、稳定错误 JSON、request id、可选 API key auth 和可选 CORS。
 
 ## 环境要求
@@ -184,6 +185,20 @@ curl -X POST http://127.0.0.1:8000/v1/ask \
   -d '{"query":"search 和 ask 有什么区别？","collection_id":"<collection_id>","top_k":5}'
 ```
 
+普通 `/v1/search` 和 `/v1/ask` 默认只返回业务调用需要的字段：chunk 内容、score、source，以及 `file_id`、`collection_id`、`file_name`、`file_type`、page 等展示 / 溯源 metadata。vector score、keyword score、BM25、matched tokens、coverage 等内部检索证据不会出现在普通 response 中。
+
+如需排查 hybrid retrieval 或为评测器收集证据，使用 debug endpoint：
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/search/debug \
+  -H "Content-Type: application/json" \
+  -d '{"query":"search 和 ask 有什么区别？","collection_id":"<collection_id>","top_k":5}'
+```
+
+debug response 会展示 final ranking、vector candidates、keyword candidates、score breakdown 和 matched token / BM25 等 retrieval evidence。默认不返回完整 chunk 内容；需要查看内容时传入 `"include_content": true`。
+
+CLI 的 `rag search --debug` 使用同一套 retrieval diagnostics；`rag search --json --debug` 输出结构与 `/v1/search/debug` 一致。
+
 从 collection 中移除文件索引，再删除文件或 collection：
 
 ```bash
@@ -199,6 +214,25 @@ curl -X DELETE http://127.0.0.1:8000/v1/collections/<collection_id>
 ```
 
 每个响应都会带有 `X-Request-ID`。客户端也可以传入同名请求头，方便串联日志。
+
+## 搜索验证
+
+`rag-eval` 是一个外置 retrieval evaluator，只通过 HTTP API 调用系统，不读取内部 SQLite，也不 import 内部 service / retriever。当前版本只验证搜索是否命中预期材料，不评估最终回答是否正确。
+
+准备 JSONL case 文件：
+
+```jsonl
+{"id":"upload-config","query":"上传限制如何配置？","collection_id":"<collection_id>","expected_sources":["README.md"],"expected_keywords":["UPLOAD_DIR","MAX_UPLOAD_MB"],"top_k":5}
+```
+
+运行评测并输出 JSON report：
+
+```bash
+rag-eval run cases.jsonl \
+  --base-url http://127.0.0.1:8000
+```
+
+默认报告路径是 `storage/eval/retrieval_report.json`；也可以通过 `--json-out` 指定其他位置。报告使用缩进后的 JSON，包含 Recall@k、MRR、source / file / keyword hit rate、retrieval evidence coverage 和 latency，并保留每条 case 的 top results 与 debug retrieval evidence。
 
 ## CLI 使用
 

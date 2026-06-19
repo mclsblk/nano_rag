@@ -152,13 +152,16 @@ def search(
     query: str,
     collection_id: str = typer.Option(..., "--collection", help="Target collection_id."),
     top_k: int = typer.Option(5, "--top-k", help="Number of search results to return.", min=1),
-    debug: bool = typer.Option(False, "--debug", help="Show full result metadata when --json is enabled."),
+    debug: bool = typer.Option(False, "--debug", help="Show retrieval diagnostics."),
     json_output: bool = typer.Option(False, "--json", help="Output stable JSON."),
 ) -> None:
     """Search the local knowledge base."""
     def command() -> None:
         with _status("Searching...", enabled=not json_output):
-            response = ApplicationService().search(query, collection_id=collection_id, top_k=top_k)
+            if debug:
+                response = ApplicationService().search_debug(query, collection_id=collection_id, top_k=top_k)
+            else:
+                response = ApplicationService().search(query, collection_id=collection_id, top_k=top_k)
         typer.echo(create_formatter().format_response(response, as_json=json_output, debug=debug))
 
     _run(command)
