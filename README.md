@@ -234,6 +234,24 @@ rag-eval run cases.jsonl \
 
 默认报告路径是 `storage/eval/retrieval_report.json`；也可以通过 `--json-out` 指定其他位置。报告使用缩进后的 JSON，包含 Recall@k、MRR、source / file / keyword hit rate、retrieval evidence coverage 和 latency，并保留每条 case 的 top results 与 debug retrieval evidence。
 
+### 本地 baseline 数据集
+
+`docs/` 目录可作为本地检索质量 baseline 素材集。建议为 baseline 单独创建 collection，并把该批素材的 embedding、keyword index、case 文件和 report 保留下来，用于后续比较 chunking、keyword score、hybrid weight 或 rerank 策略变更前后的效果。
+
+建议约定：
+
+- collection name：`docs-baseline-YYYYMMDD`
+- case 文件：`storage/eval/docs_baseline_YYYYMMDD_cases.jsonl`
+- report 文件：`storage/eval/docs_baseline_YYYYMMDD_report.json`
+
+运行方式：
+
+```bash
+rag-eval run storage/eval/docs_baseline_YYYYMMDD_cases.jsonl \
+  --base-url http://127.0.0.1:8000 \
+  --json-out storage/eval/docs_baseline_YYYYMMDD_report.json
+```
+
 ## CLI 使用
 
 查看当前配置和向量库状态：
