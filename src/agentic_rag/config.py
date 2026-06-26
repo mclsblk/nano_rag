@@ -42,6 +42,14 @@ class KeywordSettings:
 
 
 @dataclass(frozen=True)
+class SystemSettings:
+    db_path: Path
+    file_storage_dir: Path
+    upload_dir: Path
+    max_upload_mb: int
+
+
+@dataclass(frozen=True)
 class SearchSettings:
     strategy: str
     hybrid_vector_weight: float
@@ -66,6 +74,12 @@ class AgenticSettings:
     context_max_chars: int
     multi_query_count: int
     engine: str
+
+
+@dataclass(frozen=True)
+class ServerSettings:
+    api_key: str
+    cors_origins: list[str]
 
 
 class Settings(BaseSettings):
@@ -97,6 +111,12 @@ class Settings(BaseSettings):
     chroma_collection: str = "agentic_rag"
     search_strategy: str = "hybrid"
     keyword_index_path: Path = Field(default=Path("./storage/keyword.sqlite"))
+    system_db_path: Path = Field(default=Path("./storage/system.sqlite"))
+    file_storage_dir: Path = Field(default=Path("./storage/files"))
+    upload_dir: Path = Field(default=Path("./storage/uploads"))
+    max_upload_mb: int = Field(default=50, ge=1)
+    api_key: str = ""
+    cors_origins: str = ""
     hybrid_vector_weight: float = Field(default=0.65, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int = Field(default=4, ge=1)
     chunk_strategy: str = "semantic"
@@ -159,6 +179,15 @@ class Settings(BaseSettings):
         return KeywordSettings(index_path=self.keyword_index_path)
 
     @property
+    def system(self) -> SystemSettings:
+        return SystemSettings(
+            db_path=self.system_db_path,
+            file_storage_dir=self.file_storage_dir,
+            upload_dir=self.upload_dir,
+            max_upload_mb=self.max_upload_mb,
+        )
+
+    @property
     def search(self) -> SearchSettings:
         return SearchSettings(
             strategy=self.search_strategy,
@@ -186,6 +215,13 @@ class Settings(BaseSettings):
             context_max_chars=self.agentic_context_max_chars,
             multi_query_count=self.agentic_multi_query_count,
             engine=self.agentic_engine,
+        )
+
+    @property
+    def server(self) -> ServerSettings:
+        return ServerSettings(
+            api_key=self.api_key,
+            cors_origins=[origin.strip() for origin in self.cors_origins.split(",") if origin.strip()],
         )
 
 

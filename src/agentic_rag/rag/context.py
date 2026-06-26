@@ -15,12 +15,13 @@ class ContextBuilder:
 
         for index, result in enumerate(_sorted_results_with_content(results), start=1):
             content = result.content.strip()
-            section = "\n".join(
-                [
-                    f"[{index}] [source: {_source_label(result)} | page: {_page_label(result.metadata)} | score: {_score_label(result.score)}]",
-                    content,
-                ]
-            )
+            header_parts = [
+                f"source: {_source_label(result)}",
+                f"page: {_page_label(result.metadata)}",
+                f"score: {_score_label(result.score)}",
+            ]
+            label = f"[{index}] [{' | '.join(header_parts)}]"
+            section = "\n".join([label, content])
             separator_chars = 2 if sections else 0
             remaining_chars = self.max_chars - current_chars - separator_chars
             if remaining_chars <= 0:

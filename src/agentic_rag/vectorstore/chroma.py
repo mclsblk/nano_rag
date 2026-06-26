@@ -14,6 +14,7 @@ class ChromaVectorStore(VectorStore):
         self,
         embedding_model: EmbeddingModel | None = None,
         settings: Settings | None = None,
+        collection_name: str | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         if embedding_model is None:
@@ -26,7 +27,7 @@ class ChromaVectorStore(VectorStore):
             self.persist_dir.mkdir(parents=True, exist_ok=True)
             self.client = chromadb.PersistentClient(path=str(self.persist_dir))
             self.collection = self.client.get_or_create_collection(
-                name=vectorstore_settings.chroma_collection,
+                name=collection_name or vectorstore_settings.chroma_collection,
             )
         except Exception as exc:
             raise VectorStoreError("Failed to initialize Chroma vector store.") from exc
@@ -48,30 +49,22 @@ class ChromaVectorStore(VectorStore):
         except Exception as exc:
             raise VectorStoreError("Failed to add documents to Chroma.") from exc
 
-    def source_exists(self, source: str) -> bool:
+    def delete_by_file(self, file_id: str, collection_id: str) -> int:
+        where = {"$and": [{"file_id": file_id}, {"collection_id": collection_id}]}
         try:
             raw = self.collection.get(
-                where={"source": source},
-                limit=1,
-            )
-        except Exception as exc:
-            raise VectorStoreError(f"Failed to check source in Chroma: {source}") from exc
-
-        return bool(raw.get("ids"))
-
-    def delete_by_source(self, source: str) -> int:
-        try:
-            raw = self.collection.get(
-                where={"source": source},
+                where=where,
                 include=["metadatas"],
             )
             ids = raw.get("ids") or []
             if not ids:
                 return 0
 
-            self.collection.delete(where={"source": source})
+            self.collection.delete(where=where)
         except Exception as exc:
-            raise VectorStoreError(f"Failed to delete source from Chroma: {source}") from exc
+            raise VectorStoreError(
+                f"Failed to delete file from Chroma collection: {file_id} + {collection_id}"
+            ) from exc
 
         return len(ids)
 

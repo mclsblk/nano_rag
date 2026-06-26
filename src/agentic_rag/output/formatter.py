@@ -7,11 +7,20 @@ from pydantic import BaseModel
 from agentic_rag.agent.service import AgenticAskResult
 from agentic_rag.core import (
     AnswerResponse,
+    CollectionDeleteResponse,
+    CollectionListResponse,
+    CollectionResponse,
     DeIngestResponse,
+    FileDeleteResponse,
+    FileListResponse,
+    FileResponse,
     IngestResponse,
     InspectResponse,
     OutputFormatError,
+    PUBLIC_METADATA_KEYS,
+    RegistryListResponse,
     SearchResponse,
+    SearchDebugResponse,
     SearchResult,
 )
 
@@ -22,32 +31,63 @@ class OutputFormatter:
             raise OutputFormatError("content_preview_chars must be greater than 0.")
         self.content_preview_chars = content_preview_chars
 
-    def format_response(self, response: BaseModel | AgenticAskResult, as_json: bool = False) -> str:
+    def format_response(
+        self,
+        response: BaseModel | AgenticAskResult,
+        as_json: bool = False,
+        debug: bool = False,
+    ) -> str:
         if isinstance(response, AgenticAskResult):
-            return self.format_agentic_ask_result(response, as_json=as_json)
+            return self.format_agentic_ask_result(response, as_json=as_json, debug=debug)
 
         if as_json:
-            return self.format_json(response)
+            return self.format_json(response, debug=debug)
 
         if isinstance(response, SearchResponse):
             return self.format_search(response)
+        if isinstance(response, SearchDebugResponse):
+            return self.format_search_debug(response)
         if isinstance(response, AnswerResponse):
             return self.format_answer(response)
         if isinstance(response, IngestResponse):
             return self.format_ingest(response)
         if isinstance(response, DeIngestResponse):
             return self.format_de_ingest(response)
+        if isinstance(response, FileResponse):
+            return self.format_file(response)
+        if isinstance(response, FileListResponse):
+            return self.format_file_list(response)
+        if isinstance(response, FileDeleteResponse):
+            return f"File: {response.file_id}\nStatus: {response.status}"
+        if isinstance(response, CollectionResponse):
+            return self.format_collection(response)
+        if isinstance(response, CollectionListResponse):
+            return self.format_collection_list(response)
+        if isinstance(response, CollectionDeleteResponse):
+            return f"Collection: {response.collection_id}\nStatus: {response.status}"
+        if isinstance(response, RegistryListResponse):
+            return self.format_registry_list(response)
         if isinstance(response, InspectResponse):
             return self.format_inspect(response)
 
         raise OutputFormatError(f"Unsupported response type: {type(response).__name__}")
 
-    def format_json(self, response: BaseModel) -> str:
-        return response.model_dump_json()
+    def format_json(self, response: BaseModel, debug: bool = False) -> str:
+        data = response.model_dump(mode="json")
+        if not debug and not isinstance(response, SearchDebugResponse):
+            data = _public_json_data(data)
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
-    def format_agentic_ask_result(self, response: AgenticAskResult, as_json: bool = False) -> str:
+    def format_agentic_ask_result(
+        self,
+        response: AgenticAskResult,
+        as_json: bool = False,
+        debug: bool = False,
+    ) -> str:
         if as_json:
             data = response.response.model_dump(mode="json")
+            if not debug:
+                data = _public_json_data(data)
             data["debug"] = asdict(response.debug)
             return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
@@ -97,6 +137,50 @@ class OutputFormatter:
 
         return "\n".join(lines)
 
+    def format_search_debug(self, response: SearchDebugResponse) -> str:
+        diagnostics = response.diagnostics
+        lines = [
+            f"Query: {response.query}",
+            f"Collection: {response.collection_id}",
+            f"Strategy: {response.strategy}",
+            f"Top K: {response.top_k}",
+            f"Results: {len(response.results)}",
+        ]
+        if "candidate_k" in diagnostics:
+            lines.append(f"Candidate K: {diagnostics['candidate_k']}")
+        if "vector_weight" in diagnostics:
+            lines.append(f"Vector weight: {diagnostics['vector_weight']}")
+        if "keyword_weight" in diagnostics:
+            lines.append(f"Keyword weight: {diagnostics['keyword_weight']}")
+
+        for index, result in enumerate(response.results, start=1):
+            metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+            retrieval = result.get("retrieval") if isinstance(result.get("retrieval"), dict) else {}
+            lines.extend(
+                [
+                    "",
+                    f"{index}. source={result.get('source') or metadata.get('source') or 'n/a'} "
+                    f"page={_page_label(metadata)} score={_score_label(result.get('score'))}",
+                    _retrieval_label(retrieval),
+                ]
+            )
+            content = result.get("content")
+            if isinstance(content, str):
+                lines.append(_preview_content(content, self.content_preview_chars))
+
+        vector_candidates = diagnostics.get("vector_candidates")
+        keyword_candidates = diagnostics.get("keyword_candidates")
+        if isinstance(vector_candidates, list) or isinstance(keyword_candidates, list):
+            lines.extend(
+                [
+                    "",
+                    f"Vector candidates: {len(vector_candidates) if isinstance(vector_candidates, list) else 0}",
+                    f"Keyword candidates: {len(keyword_candidates) if isinstance(keyword_candidates, list) else 0}",
+                ]
+            )
+
+        return "\n".join(lines)
+
     def format_ingest(self, response: IngestResponse) -> str:
         lines = [
             f"Path: {response.path}",
@@ -105,6 +189,12 @@ class OutputFormatter:
             f"Stored chunks: {response.stored_chunks}",
             f"Skipped: {len(response.skipped)}",
         ]
+        if response.file_id is not None:
+            lines.append(f"File: {response.file_id}")
+        if response.collection_id is not None:
+            lines.append(f"Collection: {response.collection_id}")
+        if response.index_status is not None:
+            lines.append(f"Index status: {response.index_status}")
 
         for index, message in enumerate(response.skipped, start=1):
             lines.append(f"{index}. {message}")
@@ -112,12 +202,62 @@ class OutputFormatter:
         return "\n".join(lines)
 
     def format_de_ingest(self, response: DeIngestResponse) -> str:
+        lines = [
+            f"Source: {response.source}",
+            f"Deleted chunks: {response.deleted_chunks}",
+        ]
+        if response.file_id is not None:
+            lines.append(f"File: {response.file_id}")
+        if response.collection_id is not None:
+            lines.append(f"Collection: {response.collection_id}")
+        if response.deleted_keyword_chunks is not None:
+            lines.append(f"Deleted keyword chunks: {response.deleted_keyword_chunks}")
+        if response.index_status is not None:
+            lines.append(f"Index status: {response.index_status}")
+        return "\n".join(lines)
+
+    def format_file(self, response: FileResponse) -> str:
+        file = response.file
         return "\n".join(
             [
-                f"Source: {response.source}",
-                f"Deleted chunks: {response.deleted_chunks}",
+                f"File: {file.file_id}",
+                f"Original name: {file.original_name}",
+                f"Storage path: {file.storage_path}",
+                f"Size bytes: {file.size_bytes}",
+                f"Status: {file.status}",
             ]
         )
+
+    def format_file_list(self, response: FileListResponse) -> str:
+        lines = [f"Files: {len(response.files)}"]
+        for file in response.files:
+            lines.append(f"{file.file_id}\t{file.original_name}\t{file.status}\t{file.size_bytes}")
+        return "\n".join(lines)
+
+    def format_collection(self, response: CollectionResponse) -> str:
+        collection = response.collection
+        return "\n".join(
+            [
+                f"Collection: {collection.collection_id}",
+                f"Name: {collection.name}",
+                f"Chroma collection: {collection.chroma_collection}",
+                f"Keyword index: {collection.keyword_index_path}",
+            ]
+        )
+
+    def format_collection_list(self, response: CollectionListResponse) -> str:
+        lines = [f"Collections: {len(response.collections)}"]
+        for collection in response.collections:
+            lines.append(f"{collection.collection_id}\t{collection.name}\t{collection.keyword_index_path}")
+        return "\n".join(lines)
+
+    def format_registry_list(self, response: RegistryListResponse) -> str:
+        lines = [f"Registry records: {len(response.records)}"]
+        for record in response.records:
+            lines.append(
+                f"{record.collection_id}\t{record.file_id}\t{record.index_status}\t{record.indexed_chunk_count}"
+            )
+        return "\n".join(lines)
 
     def format_inspect(self, response: InspectResponse) -> str:
         lines = [
@@ -144,6 +284,10 @@ class OutputFormatter:
             f"keyword_index_path={response.keyword_index_path}",
             f"keyword_source_count={response.keyword_source_count}",
             f"keyword_chunk_count={response.keyword_chunk_count}",
+            f"file_count={response.file_count}",
+            f"collection_count={response.collection_count}",
+            f"registry_record_count={response.registry_record_count}",
+            f"indexed_chunk_count={response.indexed_chunk_count}",
             f"agentic_engine={response.agentic_engine}",
         ]
         return "\n".join(lines)
@@ -184,3 +328,28 @@ def _preview_content(content: str, limit: int | None) -> str:
     if limit is None or len(content) <= limit:
         return content
     return f"{content[:limit].rstrip()}..."
+
+
+def _public_json_data(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_public_json_data(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    data = {key: _public_json_data(item) for key, item in value.items()}
+    data.pop("retrieval", None)
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        data["metadata"] = {key: metadata[key] for key in PUBLIC_METADATA_KEYS if key in metadata}
+    return data
+
+
+def _retrieval_label(retrieval: dict[str, Any]) -> str:
+    labels = []
+    for key in ("retrieval_mode", "hybrid_score", "vector_score", "keyword_score", "raw_bm25"):
+        if key in retrieval:
+            labels.append(f"{key}={retrieval[key]}")
+    matched = retrieval.get("keyword_matched_tokens")
+    if matched:
+        labels.append(f"matched_tokens={matched}")
+    return "retrieval: " + ", ".join(labels) if labels else "retrieval: n/a"

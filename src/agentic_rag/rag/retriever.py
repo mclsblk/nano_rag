@@ -2,10 +2,39 @@ from collections.abc import Callable
 from typing import Any
 
 from agentic_rag.config import Settings
-from agentic_rag.core import IndexConsistencyError, SearchResponse, SearchResult
+from agentic_rag.core import (
+    PUBLIC_METADATA_KEYS,
+    IndexConsistencyError,
+    SearchDebugResponse,
+    SearchResponse,
+    SearchResult,
+)
 from agentic_rag.core.exceptions import ConfigurationError
 from agentic_rag.keyword import KeywordStore
 from agentic_rag.vectorstore import VectorStore
+
+
+_KEYWORD_METADATA_KEYS = (
+    "keyword_score",
+    "raw_bm25",
+    "keyword_rank",
+    "keyword_matched_tokens",
+    "keyword_content_matched_tokens",
+    "keyword_required_coverage",
+    "keyword_optional_coverage",
+    "keyword_exact_token_bonus",
+    "keyword_bm25_signal",
+    "keyword_structure_bonus",
+)
+_DEBUG_EVIDENCE_KEYS = (
+    "retrieval_mode",
+    "hybrid_score",
+    "vector_score",
+    "keyword_score",
+    "raw_distance",
+    *_KEYWORD_METADATA_KEYS,
+)
+_SCORE_BREAKDOWN_KEYS = ("hybrid_score", "vector_score", "keyword_score", "raw_distance")
 
 
 class Retriever:
@@ -16,6 +45,27 @@ class Retriever:
         results = [_as_vector_result(result) for result in self.vectorstore.similarity_search(query, top_k=top_k)]
         return SearchResponse(query=query, results=results)
 
+    def search_debug(
+        self,
+        query: str,
+        *,
+        collection_id: str,
+        top_k: int = 5,
+        include_content: bool = False,
+    ) -> SearchDebugResponse:
+        results = [_as_vector_result(result) for result in self.vectorstore.similarity_search(query, top_k=top_k)]
+        return SearchDebugResponse(
+            query=query,
+            collection_id=collection_id,
+            top_k=top_k,
+            strategy="vector",
+            results=[_debug_result_data(result, include_content) for result in results],
+            diagnostics={
+                "vector_candidates": [_debug_result_data(result, include_content) for result in results],
+                "keyword_candidates": [],
+            },
+        )
+
     def estimate_confidence(self, results: list[SearchResult]) -> str:
         return _estimate_confidence(results)
 
@@ -25,7 +75,35 @@ class KeywordRetriever:
         self.keyword_store = keyword_store
 
     def search(self, query: str, top_k: int = 5) -> SearchResponse:
-        return SearchResponse(query=query, results=self.keyword_store.keyword_search(query, top_k=top_k))
+        results = [
+            _as_keyword_result(result, rank)
+            for rank, result in enumerate(self.keyword_store.keyword_search(query, top_k=top_k), start=1)
+        ]
+        return SearchResponse(query=query, results=results)
+
+    def search_debug(
+        self,
+        query: str,
+        *,
+        collection_id: str,
+        top_k: int = 5,
+        include_content: bool = False,
+    ) -> SearchDebugResponse:
+        results = [
+            _as_keyword_result(result, rank)
+            for rank, result in enumerate(self.keyword_store.keyword_search(query, top_k=top_k), start=1)
+        ]
+        return SearchDebugResponse(
+            query=query,
+            collection_id=collection_id,
+            top_k=top_k,
+            strategy="keyword",
+            results=[_debug_result_data(result, include_content) for result in results],
+            diagnostics={
+                "vector_candidates": [],
+                "keyword_candidates": [_debug_result_data(result, include_content) for result in results],
+            },
+        )
 
     def estimate_confidence(self, results: list[SearchResult]) -> str:
         return _estimate_confidence(results)
@@ -45,6 +123,46 @@ class HybridRetriever:
         self.candidate_multiplier = candidate_multiplier
 
     def search(self, query: str, top_k: int = 5) -> SearchResponse:
+        scored, _vector_results, _keyword_results, _candidate_k = self._search_candidates(query, top_k)
+        return SearchResponse(query=query, results=scored[:top_k])
+
+    def search_debug(
+        self,
+        query: str,
+        *,
+        collection_id: str,
+        top_k: int = 5,
+        include_content: bool = False,
+    ) -> SearchDebugResponse:
+        scored, vector_results, keyword_results, candidate_k = self._search_candidates(query, top_k)
+        vector_candidates = [_as_vector_result(result) for result in vector_results]
+        keyword_candidates = [
+            _as_keyword_result(result, rank)
+            for rank, result in enumerate(keyword_results, start=1)
+        ]
+        return SearchDebugResponse(
+            query=query,
+            collection_id=collection_id,
+            top_k=top_k,
+            strategy="hybrid",
+            results=[_debug_result_data(result, include_content) for result in scored[:top_k]],
+            diagnostics={
+                "candidate_k": candidate_k,
+                "vector_weight": self.vector_weight,
+                "keyword_weight": 1.0 - self.vector_weight,
+                "vector_candidates": [_debug_result_data(result, include_content) for result in vector_candidates],
+                "keyword_candidates": [_debug_result_data(result, include_content) for result in keyword_candidates],
+            },
+        )
+
+    def estimate_confidence(self, results: list[SearchResult]) -> str:
+        return _estimate_confidence(results)
+
+    def _search_candidates(
+        self,
+        query: str,
+        top_k: int,
+    ) -> tuple[list[SearchResult], list[SearchResult], list[SearchResult], int]:
         self._check_index_consistency()
         candidate_k = max(top_k, top_k * self.candidate_multiplier)
         vector_results = self.vectorstore.similarity_search(query, top_k=candidate_k)
@@ -58,18 +176,14 @@ class HybridRetriever:
 
         for rank, result in enumerate(keyword_results, start=1):
             entry = candidates.setdefault(result.id, {"result": result})
-            entry["keyword_rank"] = rank
             entry["keyword_score"] = result.score
-            entry["raw_bm25"] = result.metadata.get("raw_bm25")
+            entry["keyword_metadata"] = _keyword_metadata(result, rank)
             if "vector_rank" not in entry:
                 entry["result"] = result
 
         scored = [_hybrid_result(candidate, self.vector_weight) for candidate in candidates.values()]
         scored.sort(key=lambda result: result.score or 0.0, reverse=True)
-        return SearchResponse(query=query, results=scored[:top_k])
-
-    def estimate_confidence(self, results: list[SearchResult]) -> str:
-        return _estimate_confidence(results)
+        return scored, vector_results, keyword_results, candidate_k
 
     def _check_index_consistency(self) -> None:
         vector_sources = set(self.vectorstore.list_sources())
@@ -124,28 +238,84 @@ def create_retriever(
 
 def _as_vector_result(result: SearchResult) -> SearchResult:
     metadata = dict(result.metadata)
-    metadata.update({"retrieval_mode": "vector", "vector_score": result.score})
-    return result.model_copy(update={"metadata": metadata})
+    raw_distance = metadata.pop("raw_distance", None)
+    retrieval = dict(result.retrieval)
+    retrieval.update({"retrieval_mode": "vector", "vector_score": result.score})
+    if raw_distance is not None:
+        retrieval["raw_distance"] = raw_distance
+    return result.model_copy(update={"metadata": metadata, "retrieval": retrieval})
+
+
+def _as_keyword_result(result: SearchResult, rank: int) -> SearchResult:
+    metadata, keyword_data = _pop_keyword_data(result.metadata)
+    retrieval = dict(result.retrieval)
+    retrieval.update({"retrieval_mode": "keyword", "keyword_rank": rank})
+    retrieval.update(keyword_data)
+    if result.score is not None:
+        retrieval["keyword_score"] = result.score
+    return result.model_copy(update={"metadata": metadata, "retrieval": retrieval})
 
 
 def _hybrid_result(candidate: dict[str, Any], vector_weight: float) -> SearchResult:
     result: SearchResult = candidate["result"]
-    metadata = dict(result.metadata)
+    metadata, _keyword_data = _pop_keyword_data(result.metadata)
+    raw_distance = metadata.pop("raw_distance", None)
     vector_score = candidate.get("vector_score", 0.0)
     keyword_score = candidate.get("keyword_score", 0.0)
     keyword_weight = 1.0 - vector_weight
 
     hybrid_score = vector_weight * vector_score + keyword_weight * keyword_score
 
-    metadata.update({"retrieval_mode": "hybrid", "hybrid_score": hybrid_score})
+    retrieval = dict(result.retrieval)
+    retrieval.update({"retrieval_mode": "hybrid", "hybrid_score": hybrid_score})
+    if raw_distance is not None:
+        retrieval["raw_distance"] = raw_distance
     if vector_score is not None:
-        metadata["vector_score"] = vector_score
+        retrieval["vector_score"] = vector_score
     if keyword_score is not None:
-        metadata["keyword_score"] = keyword_score
-    if candidate.get("raw_bm25") is not None:
-        metadata["raw_bm25"] = candidate["raw_bm25"]
+        retrieval["keyword_score"] = keyword_score
+    if vector_rank := candidate.get("vector_rank"):
+        retrieval["vector_rank"] = vector_rank
+    retrieval.update(candidate.get("keyword_metadata", {}))
 
-    return result.model_copy(update={"metadata": metadata, "score": hybrid_score})
+    return result.model_copy(update={"metadata": metadata, "retrieval": retrieval, "score": hybrid_score})
+
+
+def _debug_result_data(result: SearchResult, include_content: bool) -> dict[str, Any]:
+    retrieval = {key: result.retrieval[key] for key in _DEBUG_EVIDENCE_KEYS if key in result.retrieval}
+    score_breakdown = {key: result.retrieval[key] for key in _SCORE_BREAKDOWN_KEYS if key in result.retrieval}
+    if result.score is not None:
+        score_breakdown["score"] = result.score
+
+    data: dict[str, Any] = {
+        "id": result.id,
+        "score": result.score,
+        "source": result.source,
+        "metadata": {key: result.metadata[key] for key in PUBLIC_METADATA_KEYS if key in result.metadata},
+        "retrieval": retrieval,
+        "score_breakdown": score_breakdown,
+    }
+    if include_content:
+        data["content"] = result.content
+    return data
+
+
+def _keyword_metadata(result: SearchResult, rank: int) -> dict[str, Any]:
+    _metadata, metadata = _pop_keyword_data(result.metadata)
+    metadata["keyword_rank"] = rank
+    if result.score is not None:
+        metadata["keyword_score"] = result.score
+    return metadata
+
+
+def _pop_keyword_data(metadata: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    cleaned = dict(metadata)
+    keyword_data: dict[str, Any] = {}
+    for key in _KEYWORD_METADATA_KEYS:
+        value = cleaned.pop(key, None)
+        if value is not None:
+            keyword_data[key] = value
+    return cleaned, keyword_data
 
 
 def _estimate_confidence(results: list[SearchResult]) -> str:
