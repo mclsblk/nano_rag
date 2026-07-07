@@ -5,11 +5,11 @@ from agentic_rag.core import CollectionRecord
 from agentic_rag.document import create_document_chunker, create_document_loader
 from agentic_rag.file_sys import CollectionService, FileService, RegistryService, SystemStore, UploadService
 from agentic_rag.jobs import JobService
-from agentic_rag.keyword import SQLiteKeywordStore
+from agentic_rag.keyword import PostgresKeywordStore
 from agentic_rag.models import EmbeddingModel, create_chat_model, create_embedding_model, create_vision_model
 from agentic_rag.output import OutputFormatter
 from agentic_rag.rag import ContextBuilder, Generator, Indexer, RAGPipeline, create_retriever
-from agentic_rag.vectorstore import ChromaVectorStore
+from agentic_rag.vectorstore import PostgresVectorStore
 
 
 def create_settings() -> Settings:
@@ -18,7 +18,10 @@ def create_settings() -> Settings:
 
 def create_system_store(settings: Settings | None = None) -> SystemStore:
     resolved_settings = settings or create_settings()
-    return SystemStore(resolved_settings.system.db_path)
+    return SystemStore(
+        resolved_settings.postgres.database_url,
+        embedding_dimension=resolved_settings.postgres.embedding_dimension,
+    )
 
 
 def create_file_service(settings: Settings | None = None) -> FileService:
@@ -44,19 +47,19 @@ def create_vectorstore(
     settings: Settings | None = None,
     embedding_model: EmbeddingModel | None = None,
     collection_name: str | None = None,
-) -> ChromaVectorStore:
+) -> PostgresVectorStore:
     resolved_settings = settings or create_settings()
     resolved_embedding_model = embedding_model or create_embedding_model(resolved_settings)
-    return ChromaVectorStore(
+    return PostgresVectorStore(
         embedding_model=resolved_embedding_model,
         settings=resolved_settings,
         collection_name=collection_name,
     )
 
 
-def create_keyword_store(settings: Settings | None = None, path: str | None = None) -> SQLiteKeywordStore:
+def create_keyword_store(settings: Settings | None = None, path: str | None = None) -> PostgresKeywordStore:
     resolved_settings = settings or create_settings()
-    return SQLiteKeywordStore(path or resolved_settings.keyword.index_path)
+    return PostgresKeywordStore(path, settings=resolved_settings)
 
 
 def create_collection_indexer(

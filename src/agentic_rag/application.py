@@ -35,6 +35,7 @@ from agentic_rag.factory import (
     create_upload_service,
     create_vectorstore,
 )
+from agentic_rag.jobs_queue import enqueue_ingest_job, ingest_lock
 
 
 class ApplicationService:
@@ -191,10 +192,12 @@ class ApplicationService:
         *,
         loader: str | None = None,
     ) -> IngestResponse:
-        return create_registry_service().ingest(file_id, collection_id, load_strategy=loader)
+        with ingest_lock(file_id, collection_id, create_settings()):
+            return create_registry_service().ingest(file_id, collection_id, load_strategy=loader)
 
     def de_ingest_file(self, file_id: str, collection_id: str) -> DeIngestResponse:
-        return create_registry_service().de_ingest(file_id, collection_id)
+        with ingest_lock(file_id, collection_id, create_settings()):
+            return create_registry_service().de_ingest(file_id, collection_id)
 
     def create_ingest_job(
         self,
@@ -208,13 +211,19 @@ class ApplicationService:
         record = create_registry_service().get_record_or_none(file_id, collection_id)
         if record is not None and record.index_status == "indexed":
             raise RegistryError(f"File is already indexed in collection: {file_id} + {collection_id}")
-        return create_job_service().create_ingest_job(
+        response = create_job_service().create_ingest_job(
             file_id=file_id,
             collection_id=collection_id,
             loader=loader,
             input_path=file.storage_path,
             upload_file_name=file.original_name,
         )
+        try:
+            enqueue_ingest_job(response.job.job_id, create_settings())
+        except Exception as exc:
+            create_job_service().mark_failed(response.job.job_id, f"Failed to enqueue ingest job: {exc}")
+            raise
+        return create_job_service().get_job(response.job.job_id)
 
     def list_jobs(self) -> JobListResponse:
         return create_job_service().list_jobs()
@@ -226,11 +235,12 @@ class ApplicationService:
         jobs = create_job_service()
         job = jobs.mark_running(job_id).job
         try:
-            response = create_registry_service().ingest(
-                job.file_id,
-                job.collection_id,
-                load_strategy=job.loader,
-            )
+            with ingest_lock(job.file_id, job.collection_id, create_settings()):
+                response = create_registry_service().ingest(
+                    job.file_id,
+                    job.collection_id,
+                    load_strategy=job.loader,
+                )
         except Exception as exc:
             jobs.mark_failed(job_id, str(exc))
             return

@@ -22,6 +22,11 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
     "python-multipart>=0.0.9",
+    "psycopg[binary,pool]>=3.2.0",
+    "pgvector>=0.3.0",
+    "alembic>=1.13.0",
+    "redis>=5.0.0",
+    "rq>=1.16.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +43,7 @@ dev = [
 [project.scripts]
 rag = "agentic_rag.cli:app"
 rag-api = "agentic_rag.server.cli:app"
+rag-worker = "agentic_rag.worker.cli:app"
 rag-eval = "agentic_rag_eval.cli:app"
 
 [tool.setuptools.packages.find]

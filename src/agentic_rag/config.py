@@ -43,6 +43,7 @@ class KeywordSettings:
 
 @dataclass(frozen=True)
 class SystemSettings:
+    database_url: str
     db_path: Path
     file_storage_dir: Path
     upload_dir: Path
@@ -80,6 +81,23 @@ class AgenticSettings:
 class ServerSettings:
     api_key: str
     cors_origins: list[str]
+    max_query_chars: int
+    max_top_k: int
+    enable_file_path_import: bool
+
+
+@dataclass(frozen=True)
+class QueueSettings:
+    redis_url: str
+    rq_queue_name: str
+    ingest_job_timeout_seconds: int
+    ingest_lock_timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class PostgresSettings:
+    database_url: str
+    embedding_dimension: int
 
 
 class Settings(BaseSettings):
@@ -110,6 +128,12 @@ class Settings(BaseSettings):
     chroma_persist_dir: Path = Field(default=Path("./storage/chroma"))
     chroma_collection: str = "agentic_rag"
     search_strategy: str = "hybrid"
+    database_url: str = "postgresql://agentic_rag:agentic_rag@127.0.0.1:5432/agentic_rag"
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    rq_queue_name: str = "ingest"
+    ingest_job_timeout_seconds: int = Field(default=1800, ge=1)
+    ingest_lock_timeout_seconds: int = Field(default=3600, ge=1)
+    embedding_dimension: int = Field(default=1024, ge=1)
     keyword_index_path: Path = Field(default=Path("./storage/keyword.sqlite"))
     system_db_path: Path = Field(default=Path("./storage/system.sqlite"))
     file_storage_dir: Path = Field(default=Path("./storage/files"))
@@ -117,6 +141,9 @@ class Settings(BaseSettings):
     max_upload_mb: int = Field(default=50, ge=1)
     api_key: str = ""
     cors_origins: str = ""
+    max_query_chars: int = Field(default=4000, ge=1)
+    max_top_k: int = Field(default=50, ge=1)
+    enable_file_path_import: bool = False
     hybrid_vector_weight: float = Field(default=0.65, ge=0.0, le=1.0)
     hybrid_candidate_multiplier: int = Field(default=4, ge=1)
     chunk_strategy: str = "semantic"
@@ -181,6 +208,7 @@ class Settings(BaseSettings):
     @property
     def system(self) -> SystemSettings:
         return SystemSettings(
+            database_url=self.database_url,
             db_path=self.system_db_path,
             file_storage_dir=self.file_storage_dir,
             upload_dir=self.upload_dir,
@@ -222,6 +250,25 @@ class Settings(BaseSettings):
         return ServerSettings(
             api_key=self.api_key,
             cors_origins=[origin.strip() for origin in self.cors_origins.split(",") if origin.strip()],
+            max_query_chars=self.max_query_chars,
+            max_top_k=self.max_top_k,
+            enable_file_path_import=self.enable_file_path_import,
+        )
+
+    @property
+    def queue(self) -> QueueSettings:
+        return QueueSettings(
+            redis_url=self.redis_url,
+            rq_queue_name=self.rq_queue_name,
+            ingest_job_timeout_seconds=self.ingest_job_timeout_seconds,
+            ingest_lock_timeout_seconds=self.ingest_lock_timeout_seconds,
+        )
+
+    @property
+    def postgres(self) -> PostgresSettings:
+        return PostgresSettings(
+            database_url=self.database_url,
+            embedding_dimension=self.embedding_dimension,
         )
 
 

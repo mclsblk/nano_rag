@@ -4,7 +4,7 @@ import logging
 import time
 import uuid
 
-from fastapi import BackgroundTasks, FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -26,6 +26,7 @@ from agentic_rag.core import (
     PublicAnswerResponse,
     PublicSearchResponse,
     SearchDebugResponse,
+    ConfigurationError,
 )
 from agentic_rag.factory import create_job_service, create_settings
 from agentic_rag.server.schemas import (
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
 
     @api.post("/v1/search", response_model=PublicSearchResponse)
     def search(request: SearchRequest):
+        _validate_query_request(request.query, request.top_k)
         return ApplicationService().search_public(
             request.query,
             collection_id=request.collection_id,
@@ -136,6 +138,7 @@ def create_app() -> FastAPI:
 
     @api.post("/v1/search/debug", response_model=SearchDebugResponse, response_model_exclude_none=True)
     def search_debug(request: SearchDebugRequest):
+        _validate_query_request(request.query, request.top_k)
         return ApplicationService().search_debug(
             request.query,
             collection_id=request.collection_id,
@@ -145,6 +148,7 @@ def create_app() -> FastAPI:
 
     @api.post("/v1/ask", response_model=PublicAnswerResponse)
     def ask(request: AskRequest):
+        _validate_query_request(request.query, request.top_k)
         return ApplicationService().ask_public(
             request.query,
             collection_id=request.collection_id,
@@ -159,6 +163,8 @@ def create_app() -> FastAPI:
 
     @api.post("/v1/files/path", response_model=FileResponse)
     def import_file_path(request: FilePathImportRequest):
+        if not create_settings().server.enable_file_path_import:
+            raise ConfigurationError("Server-side file path import is disabled.")
         return ApplicationService().import_file_path(request.path)
 
     @api.post("/v1/files/upload", response_model=FileResponse)
@@ -199,14 +205,12 @@ def create_app() -> FastAPI:
         return ApplicationService().de_ingest_file(file_id, collection_id)
 
     @api.post("/v1/ingest/jobs", response_model=JobResponse)
-    def create_ingest_job(request: IngestJobCreateRequest, background_tasks: BackgroundTasks):
-        response = ApplicationService().create_ingest_job(
+    def create_ingest_job(request: IngestJobCreateRequest):
+        return ApplicationService().create_ingest_job(
             request.file_id,
             request.collection_id,
             loader=request.loader,
         )
-        background_tasks.add_task(ApplicationService().run_ingest_job, response.job.job_id)
-        return response
 
     @api.get("/v1/jobs", response_model=JobListResponse)
     def list_jobs():
@@ -237,3 +241,11 @@ def _authenticate(request: Request) -> JSONResponse | None:
         status_code=401,
         content=error_response("Unauthorized", "Invalid or missing API key"),
     )
+
+
+def _validate_query_request(query: str, top_k: int) -> None:
+    server = create_settings().server
+    if len(query) > server.max_query_chars:
+        raise ConfigurationError(f"Query exceeds max length: {server.max_query_chars} characters")
+    if top_k > server.max_top_k:
+        raise ConfigurationError(f"top_k exceeds max value: {server.max_top_k}")

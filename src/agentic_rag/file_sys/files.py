@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
 import shutil
-import sqlite3
+from typing import Any
 
 from agentic_rag.core import FileDeleteResponse, FileListResponse, FileRecord, FileResponse, RegistryError
 from agentic_rag.file_sys.store import SystemStore
@@ -48,7 +48,7 @@ class FileService:
                     file_id, original_name, content_hash, storage_path,
                     file_type, size_bytes, status, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT(file_id) DO UPDATE SET
                     original_name = excluded.original_name,
                     storage_path = excluded.storage_path,
@@ -85,7 +85,7 @@ class FileService:
 
     def get_file_or_none(self, file_id: str) -> FileRecord | None:
         with self.store.connect() as connection:
-            row = connection.execute("SELECT * FROM files WHERE file_id = ?", (file_id,)).fetchone()
+            row = connection.execute("SELECT * FROM files WHERE file_id = %s", (file_id,)).fetchone()
         return _file_record(row) if row is not None else None
 
     def delete_file(self, file_id: str) -> FileDeleteResponse:
@@ -93,7 +93,7 @@ class FileService:
         storage_path = Path(record.storage_path)
         shutil.rmtree(storage_path.parent)
         with self.store.connect() as connection:
-            connection.execute("UPDATE files SET status = 'deleted' WHERE file_id = ?", (file_id,))
+            connection.execute("UPDATE files SET status = 'deleted' WHERE file_id = %s", (file_id,))
         return FileDeleteResponse(file_id=file_id, status="deleted")
 
     def count_active(self) -> int:
@@ -112,7 +112,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _file_record(row: sqlite3.Row) -> FileRecord:
+def _file_record(row: Any) -> FileRecord:
     return FileRecord(
         file_id=str(row["file_id"]),
         original_name=str(row["original_name"]),

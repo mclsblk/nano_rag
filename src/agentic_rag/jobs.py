@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 import json
-import sqlite3
 import uuid
+from typing import Any
+
+from psycopg import errors
 
 from agentic_rag.core import JobError, JobListResponse, JobRecord, JobResponse
 from agentic_rag.file_sys.store import SystemStore
@@ -36,34 +38,37 @@ class JobService:
             created_at=now,
             updated_at=now,
         )
-        with self.store.connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO jobs (
-                    job_id, job_type, status, file_id, collection_id, loader,
-                    input_path, upload_file_name, skipped, created_at, updated_at
+        try:
+            with self.store.connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO jobs (
+                        job_id, job_type, status, file_id, collection_id, loader,
+                        input_path, upload_file_name, skipped, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                    """,
+                    (
+                        record.job_id,
+                        record.job_type,
+                        record.status,
+                        record.file_id,
+                        record.collection_id,
+                        record.loader,
+                        record.input_path,
+                        record.upload_file_name,
+                        json.dumps(record.skipped),
+                        record.created_at,
+                        record.updated_at,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.job_id,
-                    record.job_type,
-                    record.status,
-                    record.file_id,
-                    record.collection_id,
-                    record.loader,
-                    record.input_path,
-                    record.upload_file_name,
-                    json.dumps(record.skipped),
-                    record.created_at,
-                    record.updated_at,
-                ),
-            )
+        except errors.UniqueViolation as exc:
+            raise JobError(f"Active ingest job already exists: {file_id} + {collection_id}") from exc
         return JobResponse(job=record)
 
     def get_job(self, job_id: str) -> JobResponse:
         with self.store.connect() as connection:
-            row = connection.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+            row = connection.execute("SELECT * FROM jobs WHERE job_id = %s", (job_id,)).fetchone()
         if row is None:
             raise JobError(f"Job does not exist: {job_id}")
         return JobResponse(job=_job_record(row))
@@ -79,8 +84,8 @@ class JobService:
                 """
                 SELECT COUNT(*) AS count FROM jobs
                 WHERE job_type = 'ingest'
-                  AND file_id = ?
-                  AND collection_id = ?
+                  AND file_id = %s
+                  AND collection_id = %s
                   AND status IN ('queued', 'running')
                 """,
                 (file_id, collection_id),
@@ -92,13 +97,32 @@ class JobService:
             row = connection.execute("SELECT COUNT(*) AS count FROM jobs").fetchone()
         return int(row["count"]) if row is not None else 0
 
+    def attach_queue_job(self, job_id: str, rq_job_id: str) -> JobResponse:
+        with self.store.connect() as connection:
+            connection.execute(
+                "UPDATE jobs SET rq_job_id = %s, updated_at = %s WHERE job_id = %s",
+                (rq_job_id, _now(), job_id),
+            )
+        return self.get_job(job_id)
+
     def mark_running(self, job_id: str) -> JobResponse:
         now = _now()
         with self.store.connect() as connection:
-            connection.execute(
-                "UPDATE jobs SET status = 'running', updated_at = ?, started_at = ? WHERE job_id = ?",
-                (now, now, job_id),
+            cursor = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'running',
+                    updated_at = %s,
+                    started_at = %s,
+                    attempt_count = attempt_count + 1,
+                    last_heartbeat_at = %s
+                WHERE job_id = %s
+                  AND status = 'queued'
+                """,
+                (now, now, now, job_id),
             )
+            if cursor.rowcount != 1:
+                raise JobError(f"Job is not queued or does not exist: {job_id}")
         return self.get_job(job_id)
 
     def mark_succeeded(
@@ -112,18 +136,19 @@ class JobService:
     ) -> JobResponse:
         now = _now()
         with self.store.connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE jobs
                 SET status = 'succeeded',
-                    loaded_documents = ?,
-                    generated_chunks = ?,
-                    stored_chunks = ?,
-                    skipped = ?,
+                    loaded_documents = %s,
+                    generated_chunks = %s,
+                    stored_chunks = %s,
+                    skipped = %s::jsonb,
                     error_message = NULL,
-                    updated_at = ?,
-                    finished_at = ?
-                WHERE job_id = ?
+                    updated_at = %s,
+                    finished_at = %s
+                WHERE job_id = %s
+                  AND status = 'running'
                 """,
                 (
                     loaded_documents,
@@ -135,6 +160,8 @@ class JobService:
                     job_id,
                 ),
             )
+            if cursor.rowcount != 1:
+                raise JobError(f"Job is not running or does not exist: {job_id}")
         return self.get_job(job_id)
 
     def mark_failed(self, job_id: str, error_message: str) -> JobResponse:
@@ -144,10 +171,11 @@ class JobService:
                 """
                 UPDATE jobs
                 SET status = 'failed',
-                    error_message = ?,
-                    updated_at = ?,
-                    finished_at = ?
-                WHERE job_id = ?
+                    error_message = %s,
+                    updated_at = %s,
+                    finished_at = %s
+                WHERE job_id = %s
+                  AND status IN ('queued', 'running')
                 """,
                 (error_message, now, now, job_id),
             )
@@ -161,17 +189,17 @@ class JobService:
                 UPDATE jobs
                 SET status = 'failed',
                     error_message = 'Job interrupted by service restart',
-                    updated_at = ?,
-                    finished_at = ?
+                    updated_at = %s,
+                    finished_at = %s
                 WHERE job_type = 'ingest'
-                  AND status IN ('queued', 'running')
+                  AND status = 'running'
                 """,
                 (now, now),
             )
             return cursor.rowcount
 
 
-def _job_record(row: sqlite3.Row) -> JobRecord:
+def _job_record(row: Any) -> JobRecord:
     return JobRecord(
         job_id=str(row["job_id"]),
         job_type=str(row["job_type"]),
@@ -184,7 +212,7 @@ def _job_record(row: sqlite3.Row) -> JobRecord:
         loaded_documents=int(row["loaded_documents"]),
         generated_chunks=int(row["generated_chunks"]),
         stored_chunks=int(row["stored_chunks"]),
-        skipped=json.loads(str(row["skipped"])),
+        skipped=_json_list(row["skipped"]),
         error_message=str(row["error_message"]) if row["error_message"] is not None else None,
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
@@ -195,3 +223,10 @@ def _job_record(row: sqlite3.Row) -> JobRecord:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _json_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    loaded = json.loads(str(value))
+    return [str(item) for item in loaded] if isinstance(loaded, list) else []

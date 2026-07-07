@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
-import sqlite3
+from typing import Any
 import uuid
 
 from agentic_rag.core import (
@@ -36,7 +36,7 @@ class CollectionService:
                     collection_id, name, description, chroma_collection,
                     keyword_index_path, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (
                     record.collection_id,
@@ -57,7 +57,7 @@ class CollectionService:
     def get_collection(self, collection_id: str) -> CollectionRecord:
         with self.store.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM collections WHERE collection_id = ?",
+                "SELECT * FROM collections WHERE collection_id = %s",
                 (collection_id,),
             ).fetchone()
         if row is None:
@@ -67,7 +67,7 @@ class CollectionService:
     def delete_collection(self, collection_id: str) -> CollectionDeleteResponse:
         self.get_collection(collection_id)
         with self.store.connect() as connection:
-            connection.execute("DELETE FROM collections WHERE collection_id = ?", (collection_id,))
+            connection.execute("DELETE FROM collections WHERE collection_id = %s", (collection_id,))
         return CollectionDeleteResponse(collection_id=collection_id, status="deleted")
 
     def count(self) -> int:
@@ -76,7 +76,7 @@ class CollectionService:
         return int(row["count"]) if row is not None else 0
 
 
-def _collection_record(row: sqlite3.Row) -> CollectionRecord:
+def _collection_record(row: Any) -> CollectionRecord:
     return CollectionRecord(
         collection_id=str(row["collection_id"]),
         name=str(row["name"]),

@@ -11,8 +11,8 @@
 
 - 本地优先：默认使用 Ollama 提供聊天模型和 embedding 模型。
 - 多 provider：支持 Ollama 和 OpenAI-compatible API，可分别配置 chat / embedding provider。
-- 持久化向量库：使用 Chroma 存储文档分块和向量。
-- Hybrid Search：默认同时使用 Chroma vector search 和 SQLite FTS5 keyword search。
+- Postgres 检索存储：使用 PostgreSQL + pgvector 存储文档分块、向量和全文检索字段。
+- Hybrid Search：默认同时使用 pgvector vector search 和 PostgreSQL full-text search。
 - 托管文件与 collection：文件先进入本地 file storage，再按需 ingest 到一个或多个 collection。
 - 文档加载：默认支持 `.md`、`.txt`、`.pdf` 文件；`auto` / `visual` loader 策略下可处理 `.png`、`.jpg`、`.jpeg`、`.webp` 图片。
 - Agentic Ask：可选启用 query rewrite、multi-query retrieval、context judge 和 fallback policy。
@@ -79,16 +79,21 @@ OPENAI_COMPATIBLE_TIMEOUT_SECONDS=30
 DOCUMENT_LOAD_STRATEGY=text
 VISUAL_MODEL_PROVIDER=openai_compatible
 VISUAL_MIN_TEXT_CHARS=40
-CHROMA_PERSIST_DIR=./storage/chroma
-CHROMA_COLLECTION=agentic_rag
 SEARCH_STRATEGY=hybrid
-KEYWORD_INDEX_PATH=./storage/keyword.sqlite
-SYSTEM_DB_PATH=./storage/system.sqlite
+DATABASE_URL=postgresql://agentic_rag:agentic_rag@127.0.0.1:5432/agentic_rag
+REDIS_URL=redis://127.0.0.1:6379/0
+RQ_QUEUE_NAME=ingest
+INGEST_JOB_TIMEOUT_SECONDS=1800
+INGEST_LOCK_TIMEOUT_SECONDS=3600
+EMBEDDING_DIMENSION=1024
 FILE_STORAGE_DIR=./storage/files
 UPLOAD_DIR=./storage/uploads
 MAX_UPLOAD_MB=50
 API_KEY=
 CORS_ORIGINS=
+MAX_QUERY_CHARS=4000
+MAX_TOP_K=50
+ENABLE_FILE_PATH_IMPORT=false
 HYBRID_VECTOR_WEIGHT=0.65
 HYBRID_CANDIDATE_MULTIPLIER=4
 CHUNK_STRATEGY=semantic
@@ -104,17 +109,17 @@ AGENTIC_CONTEXT_MAX_CHARS=4000
 AGENTIC_MULTI_QUERY_COUNT=3
 ```
 
-`CHROMA_PERSIST_DIR` 指向本地 Chroma 持久化目录。默认的 `storage/chroma/` 属于运行时数据，不适合提交到版本库。`SYSTEM_DB_PATH` 保存 file / collection / registry / job 系统状态；`FILE_STORAGE_DIR` 保存托管文件副本；`UPLOAD_DIR` 保存 API 上传暂存文件；`KEYWORD_INDEX_PATH` 仍保留旧默认 keyword index 配置，新 collection 默认使用 `storage/keyword/<collection_id>.sqlite`。
+`DATABASE_URL` 指向 PostgreSQL 数据库，系统状态、chunk、embedding 和全文检索字段都保存在其中。`REDIS_URL` 用于 RQ ingest 队列和写锁。`FILE_STORAGE_DIR` 保存托管文件副本；`UPLOAD_DIR` 保存 API 上传暂存文件。`EMBEDDING_DIMENSION` 必须和当前 embedding 模型返回的向量维度一致。
 
 `API_KEY` 为空时不启用认证；配置后，除 `/health`、`/ready`、`/docs` 和 `/openapi.json` 外，API 请求需要携带 `Authorization: Bearer <API_KEY>` 或 `X-API-Key: <API_KEY>`。`CORS_ORIGINS` 为空时不启用 CORS；配置多个浏览器来源时使用逗号分隔。
 
 `SEARCH_STRATEGY` 支持：
 
-- `hybrid`：默认策略。并行执行 Chroma vector search 与 SQLite keyword search，再用简单加权分数合并排序。
-- `vector`：只使用 Chroma vector search，便于回退和 debug。
-- `keyword`：只使用 SQLite FTS5 keyword search；search / ask 检索阶段不需要 embedding 查询。
+- `hybrid`：默认策略。执行 pgvector search 与 PostgreSQL full-text search，再用简单加权分数合并排序。
+- `vector`：只使用 pgvector search，便于回退和 debug。
+- `keyword`：只使用 PostgreSQL full-text search；search / ask 检索阶段不需要 embedding 查询。
 
-SQLite keyword index 会保存 collection 内的 chunk 原文和基于正文生成的内部 keyword text；不保存文件生命周期状态。file / collection / registry 生命周期状态保存在 system SQLite 中。`source` 只作为展示和溯源字段，不再作为生命周期主键。keyword text 只用于检索，不会作为 `search` / `ask` 的结果内容返回。metadata 不参与 keyword text 生成，只通过结果里的 source、page 等字段用于溯源。中文 keyword text 只生成 bigram / trigram，不生成单字 token，因此单字中文 query 不保证命中。
+PostgreSQL 会保存 collection 内的 chunk 原文、embedding、全文检索字段和文件生命周期状态。`source` 只作为展示和溯源字段，不再作为生命周期主键。keyword text 只用于检索，不会作为 `search` / `ask` 的结果内容返回。metadata 不参与 keyword text 生成，只通过结果里的 source、page 等字段用于溯源。中文 keyword text 只生成 bigram / trigram，不生成单字 token，因此单字中文 query 不保证命中。
 
 keyword query 会先区分 API 名、英文/数字专名、版本号等高价值 token，以及“功能”“作用”“参数”等泛化意图 token。keyword score 表示 query 满足程度，会综合 required token 覆盖、optional token 覆盖、精确专名命中、BM25 信号和正文结构信号；它不是简单的 FTS 排名倒数。升级 keyword tokenization 或 score 逻辑后，已入库旧数据需要先对对应 `file_id + collection_id` 执行 de-ingest，再重新 ingest。
 
@@ -131,10 +136,22 @@ keyword query 会先区分 API 名、英文/数字专名、版本号等高价值
 
 ## API 使用
 
+本地开发需先启动 PostgreSQL（含 pgvector 扩展）和 Redis，并执行迁移：
+
+```bash
+alembic upgrade head
+```
+
 启动 API 服务：
 
 ```bash
 rag-api --host 127.0.0.1 --port 8000
+```
+
+启动 ingest worker：
+
+```bash
+rag-worker --queue ingest
 ```
 
 检查进程和本地依赖：

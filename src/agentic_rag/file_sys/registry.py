@@ -1,6 +1,5 @@
 from collections.abc import Callable
 from datetime import datetime, timezone
-import sqlite3
 from typing import Any
 
 from agentic_rag.file_sys.collections import CollectionService
@@ -64,6 +63,7 @@ class RegistryService:
                 source=f"{file.file_id}/{file.original_name}",
             )
         except Exception as exc:
+            self._cleanup_partial_index(collection, file_id, collection_id)
             self._upsert_record(
                 file_id=file_id,
                 collection_id=collection_id,
@@ -73,6 +73,10 @@ class RegistryService:
                 last_error=str(exc),
             )
             raise
+
+        vectorstore = self.vectorstore_factory(collection)
+        if hasattr(vectorstore, "mark_file_indexed"):
+            vectorstore.mark_file_indexed(file_id, collection_id)
 
         self._upsert_record(
             file_id=file_id,
@@ -115,6 +119,12 @@ class RegistryService:
             deleted_keyword_chunks=deleted_keyword_chunks,
         )
 
+    def _cleanup_partial_index(self, collection: CollectionRecord, file_id: str, collection_id: str) -> None:
+        try:
+            self.vectorstore_factory(collection).delete_by_file(file_id, collection_id)
+        except Exception:
+            pass
+
     def delete_file(self, file_id: str) -> FileDeleteResponse:
         records = self.active_records_for_file(file_id)
         if records:
@@ -122,6 +132,8 @@ class RegistryService:
             raise RegistryError(
                 f"File still has active indexed registry records: {file_id}. De-ingest from: {collection_ids}"
             )
+        with self.store.connect() as connection:
+            connection.execute("DELETE FROM registry WHERE file_id = %s", (file_id,))
         return self.files.delete_file(file_id)
 
     def delete_collection(self, collection_id: str) -> CollectionDeleteResponse:
@@ -131,6 +143,8 @@ class RegistryService:
             raise RegistryError(
                 f"Collection still has active indexed registry records: {collection_id}. De-ingest files: {file_ids}"
             )
+        with self.store.connect() as connection:
+            connection.execute("DELETE FROM registry WHERE collection_id = %s", (collection_id,))
         return self.collections.delete_collection(collection_id)
 
     def list_records(self) -> RegistryListResponse:
@@ -143,7 +157,7 @@ class RegistryService:
     def get_record_or_none(self, file_id: str, collection_id: str) -> RegistryRecord | None:
         with self.store.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM registry WHERE file_id = ? AND collection_id = ?",
+                "SELECT * FROM registry WHERE file_id = %s AND collection_id = %s",
                 (file_id, collection_id),
             ).fetchone()
         return _registry_record(row) if row is not None else None
@@ -175,7 +189,7 @@ class RegistryService:
             raise RegistryError(f"Unsupported registry lookup column: {column}")
         with self.store.connect() as connection:
             rows = connection.execute(
-                f"SELECT * FROM registry WHERE {column} = ? AND index_status = 'indexed'",
+                f"SELECT * FROM registry WHERE {column} = %s AND index_status IN ('indexing', 'indexed')",
                 (value,),
             ).fetchall()
         return [_registry_record(row) for row in rows]
@@ -197,7 +211,7 @@ class RegistryService:
                     file_id, collection_id, index_status,
                     indexed_chunk_count, indexed_at, last_error
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT(file_id, collection_id) DO UPDATE SET
                     index_status = excluded.index_status,
                     indexed_chunk_count = excluded.indexed_chunk_count,
@@ -208,7 +222,7 @@ class RegistryService:
             )
 
 
-def _registry_record(row: sqlite3.Row) -> RegistryRecord:
+def _registry_record(row: Any) -> RegistryRecord:
     return RegistryRecord(
         file_id=str(row["file_id"]),
         collection_id=str(row["collection_id"]),
